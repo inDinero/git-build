@@ -1,0 +1,298 @@
+#!/bin/sh
+
+function die {
+  if [ -z "$1" ]; then
+    echo "git-build v0.3"
+    echo "Usage: ./git-build [-e <production|staging>] [-v <sub_version_number>] [INPUT_FILE]"
+  else
+    log_error $@
+  fi
+
+  exit 1
+}
+
+function execute {
+  log_info $@
+
+  raw_output=`$@ 2>&1`
+  return_code=$?
+
+  while read -r line_output; do
+    log_debug $line_output
+  done <<< "$raw_output"
+}
+
+function execute_or_die {
+  execute $@
+  if [ $return_code -ne 0 ]; then
+    die "Git error! (status code: $?)"
+  fi
+}
+
+function log_debug {
+  echo "\x1B[90m[DEBUG] git-build>    $@\x1B[39m" | tee -a $LOG_FILE
+}
+
+function log_error {
+  echo "\x1B[31m[ERROR] git-build> $@\x1B[39m" | tee -a $LOG_FILE
+}
+
+function log_info {
+  echo "[INFO ] git-build> $@" | tee -a $LOG_FILE
+}
+
+function log_warn {
+  echo "\x1B[31m[WARN ] git-build> $@\x1B[39m" | tee -a $LOG_FILE
+}
+
+function merge_or_abort {
+  log_info "# Merging $1 to $2"
+  execute_or_die "git checkout $2"
+  execute "git merge --no-edit --no-ff $1"
+
+  if [ $return_code -ne 0 ]; then
+    log_warn "# Merge conflict detected for $1"
+    execute_or_die "git merge --abort"
+    log_info ""
+
+    UNMERGED_BRANCHES+=($1)
+  else
+    log_info "# Successfully merged $1 to $2"
+    log_info ""
+
+    MERGED_BRANCHES+=($1)
+  fi
+}
+
+function parse_cli_arguments {
+  ENVIRONMENT=""
+  local option sub_version=0
+
+  while getopts :v:e: option; do
+    case $option in
+      v)
+        if [ $sub_version -eq 0 ]; then
+          sub_version=${OPTARG}
+        else
+          die
+        fi
+        ;;
+      e)
+        if [ -z $ENVIRONMENT ]; then
+          ENVIRONMENT=${OPTARG}
+        else
+          die
+        fi
+        ;;
+      *)
+        die
+        ;;
+    esac
+  done
+
+  if [ -z $ENVIRONMENT ]; then
+    ENVIRONMENT="staging" # If not set, environment defaults to staging
+  fi
+
+  VERSION=`date +%Y.%m.%d | sed "s/^2016/16/" | sed "s/\.0/\./g"`
+  if [ $sub_version -ne 0 ]; then
+    VERSION="$VERSION.$sub_version" # If non-zero, append sub-version
+  fi
+
+  # Generate release / staging branch
+  if [ $ENVIRONMENT = "staging" ]; then
+    BUILD_BRANCH="stage/$VERSION"
+  else
+    BUILD_BRANCH="release/$VERSION"
+  fi
+}
+
+function parse_feature_branches {
+  shift $((OPTIND-1))
+
+  # Get input file, if applicable; generate one, otherwise.
+  if [ -z "$1" ]; then
+    local input_file="feature-branches-$VERSION"
+    echo "# Please enter the list of feature branches to be deployed." > $input_file
+    echo "# Lines starting with '#' will be ignored, and an empty message aborts the script." >> $input_file
+    echo "" >> $input_file
+    vi $input_file
+  elif [ -z "$2" ]; then
+    input_file=$1
+  else
+    die
+  fi
+
+  FEATURE_BRANCHES=`sed 's/#.*$//' $input_file | grep -E -v "^[[:space:]]*$" | awk '{print $1}'`
+  if [ -z "$FEATURE_BRANCHES" ]; then
+    die "# No feature branches found!"
+  fi
+}
+
+function rebase_and_merge_or_abort {
+  log_info "# Rebasing $1 to $2"
+  execute_or_die "git checkout $1"
+  execute "git rebase $2"
+
+  if [ $return_code -ne 0 ]; then
+    log_warn "# Rebase conflict detected for $1"
+    execute_or_die "git rebase --abort"
+    log_info ""
+
+    UNREBASED_BRANCHES+=($1)
+  else
+    log_info "# Successfully rebased $1 to $2"
+    log_info ""
+
+    merge_or_abort $1 $2
+  fi
+}
+
+function show_finale {
+  local branch random=$(( $RANDOM % 3 ))
+
+  if [ ${#MERGED_BRANCHES[@]} -eq 0 ]; then
+    log_warn "# Achievement unlocked: ALL PULL REQUESTS FAILED!!!"
+    log_warn ""
+  elif [ $ENVIRONMENT = "production" ]; then
+    log_info "# Complete this build with the following commands:"
+
+    for branch in ${MERGED_BRANCHES[@]}; do
+      if [ $branch = $BUILD_BRANCH ]; then
+        log_info "#   git checkout $branch"
+        log_info "#   git push origin $branch"
+        log_info "#   git checkout develop"
+        log_info "#   git push --force-with-lease origin develop"
+        log_info "#   git checkout master"
+        log_info "#   git push --force-with-lease origin master"
+        log_info "#   git push origin $VERSION"
+      else
+        log_info "#   git checkout $branch"
+        log_info "#   git push --force-with-lease origin $branch"
+      fi
+    done
+
+    log_info ""
+
+    log_info "# Undo or cleanup this build with the following commands:"
+    log_info "#   git checkout develop"
+
+    for branch in ${UNREBASED_BRANCHES[@]}; do
+      log_info "#   git branch -D $branch"
+    done
+
+    for branch in ${UNMERGED_BRANCHES[@]}; do
+      log_info "#   git branch -D $branch"
+    done
+
+    for branch in ${MERGED_BRANCHES[@]}; do
+      log_info "#   git branch -D $branch"
+
+      if [ $branch = $BUILD_BRANCH ]; then
+        log_info "#   git branch -D master"
+        log_info "#   git checkout master"
+        log_info "#   git branch -D develop"
+        log_info "#   git tag -d $VERSION"
+        log_info "#   git checkout develop"
+      fi
+    done
+
+    log_info ""
+  else
+    log_info "# Complete this build with the following command:"
+    log_info "#   git push origin $BUILD_BRANCH"
+    log_info ""
+
+    log_info "# Undo or clean up this build with the following commands:"
+    log_info "#   git checkout develop"
+
+    for branch in $FEATURE_BRANCHES; do
+      log_info "#   git branch -D $branch"
+    done
+
+    log_info "#   git branch -D $BUILD_BRANCH"
+    log_info ""
+  fi
+
+  if [ $random -eq 1 ]; then
+    log_info "# May the odds be ever in your favor!"
+  elif [ $random -eq 2 ]; then
+    log_info "# May the force be with you!"
+  else
+    log_info "# Good luck, soldier!"
+  fi
+}
+
+function show_merge_conflicts {
+  local branch
+  if [ ${#UNMERGED_BRANCHES[@]} -gt 0 ]; then
+    log_warn "# The following branches have NOT been merged:"
+    for branch in ${UNMERGED_BRANCHES[@]}; do
+      log_warn "#   $branch"
+    done
+    log_warn ""
+  fi
+}
+
+function show_rebase_conflicts {
+  local branch
+  if [ ${#UNREBASED_BRANCHES[@]} -gt 0 ]; then
+    log_warn "# The following branches have NOT been rebased to develop:"
+    for branch in ${UNREBASED_BRANCHES[@]}; do
+      log_warn "#   $branch"
+    done
+    log_warn ""
+  fi
+}
+
+parse_cli_arguments $@
+parse_feature_branches $@
+
+LOG_FILE="$ENVIRONMENT.$VERSION.log"
+> $LOG_FILE # Empty the log file
+
+log_info "# Building $BUILD_BRANCH for deployment to $ENVIRONMENT"
+
+execute_or_die "git fetch origin"
+
+for branch in $FEATURE_BRANCHES; do
+  execute_or_die "git checkout $branch"
+done
+
+execute_or_die "git checkout master"
+execute_or_die "git checkout develop"
+
+MERGED_BRANCHES=()
+UNMERGED_BRANCHES=()
+UNREBASED_BRANCHES=()
+
+if [ $ENVIRONMENT = "production" ]; then
+  for branch in $FEATURE_BRANCHES; do
+    execute_or_die "git checkout $branch"
+    rebase_and_merge_or_abort $branch "develop"
+  done
+
+  if [ ${#MERGED_BRANCHES[@]} -ne 0 ]; then
+    execute_or_die "git checkout develop"
+    execute_or_die "git checkout -b $BUILD_BRANCH"
+
+    execute_or_die "git checkout master"
+    merge_or_abort $BUILD_BRANCH "master"
+
+    if [ ${MERGED_BRANCHES[@]: -1} = $BUILD_BRANCH ]; then
+      execute_or_die "git tag $VERSION"
+    fi
+  fi
+else
+  execute "git checkout -b $BUILD_BRANCH"
+  log_info ""
+
+  for branch in $FEATURE_BRANCHES; do
+    execute_or_die "git checkout $branch"
+    merge_or_abort $branch $BUILD_BRANCH
+  done
+fi
+
+show_rebase_conflicts
+show_merge_conflicts
+show_finale

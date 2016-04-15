@@ -2,6 +2,16 @@
 All notable changes to this project will be documented in this file.
 This project adheres to [Semantic Versioning](http://semver.org/).
 
+## 0.4.0 - 2016-04-15
+* To get the latest copy, run git-merge after git-fetch origin
+* Remove --force-with-lease flag when pushing to develop or master
+* In case of rebase / merge conflict on production, DO NOT proceed with creation of release branch
+  * Include instructions for conflicting branches
+* Generate cleanup script after each build
+  * Removes auto-generated input file and/or tags (if applicable)
+  * Removes feature branches and build branch
+  * Removes cleanup file
+
 ## 0.3.0 - 2016-03-16
 * Condensed two scripts (git-staging and git-production) into one (git-build)
 * Added environment option (-e), which defaults to staging

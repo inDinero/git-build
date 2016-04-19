@@ -29,6 +29,10 @@ function execute_or_die {
   fi
 }
 
+function log_cleanup {
+  echo $@ >> $CLEANUP_FILE
+}
+
 function log_debug {
   echo "\x1B[90m[DEBUG] git-build>    $@\x1B[39m" | tee -a $LOG_FILE
 }
@@ -112,11 +116,13 @@ function parse_feature_branches {
 
   # Get input file, if applicable; generate one, otherwise.
   if [ -z "$1" ]; then
-    local input_file="feature-branches-$VERSION"
-    echo "# Please enter the list of feature branches to be deployed." > $input_file
+    local input_file="feature-branches-$ENVIRONMENT.$VERSION.txt"
+    echo "" > $input_file
+    echo "# Please enter the list of feature branches to be deployed." >> $input_file
     echo "# Lines starting with '#' will be ignored, and an empty message aborts the script." >> $input_file
-    echo "" >> $input_file
     vi $input_file
+
+    log_cleanup "rm $input_file"
   elif [ -z "$2" ]; then
     input_file=$1
   else
@@ -148,71 +154,30 @@ function rebase_and_merge_or_abort {
   fi
 }
 
-function show_finale {
+function show_cleanup {
   local branch random=$(( $RANDOM % 3 ))
 
-  if [ ${#MERGED_BRANCHES[@]} -eq 0 ]; then
-    log_warn "# Achievement unlocked: ALL PULL REQUESTS FAILED!!!"
-    log_warn ""
-  elif [ $ENVIRONMENT = "production" ]; then
-    log_info "# Complete this build with the following commands:"
+  log_cleanup "git checkout develop"
 
-    for branch in ${MERGED_BRANCHES[@]}; do
-      if [ $branch = $BUILD_BRANCH ]; then
-        log_info "#   git checkout $branch"
-        log_info "#   git push origin $branch"
-        log_info "#   git checkout develop"
-        log_info "#   git push --force-with-lease origin develop"
-        log_info "#   git checkout master"
-        log_info "#   git push --force-with-lease origin master"
-        log_info "#   git push origin $VERSION"
-      else
-        log_info "#   git checkout $branch"
-        log_info "#   git push --force-with-lease origin $branch"
-      fi
-    done
+  for branch in $FEATURE_BRANCHES; do
+    log_cleanup "git branch -D $branch"
+  done
 
-    log_info ""
+  log_cleanup "git branch -D $BUILD_BRANCH"
 
-    log_info "# Undo or cleanup this build with the following commands:"
-    log_info "#   git checkout develop"
-
-    for branch in ${UNREBASED_BRANCHES[@]}; do
-      log_info "#   git branch -D $branch"
-    done
-
-    for branch in ${UNMERGED_BRANCHES[@]}; do
-      log_info "#   git branch -D $branch"
-    done
-
-    for branch in ${MERGED_BRANCHES[@]}; do
-      log_info "#   git branch -D $branch"
-
-      if [ $branch = $BUILD_BRANCH ]; then
-        log_info "#   git branch -D master"
-        log_info "#   git checkout master"
-        log_info "#   git branch -D develop"
-        log_info "#   git tag -d $VERSION"
-        log_info "#   git checkout develop"
-      fi
-    done
-
-    log_info ""
-  else
-    log_info "# Complete this build with the following command:"
-    log_info "#   git push origin $BUILD_BRANCH"
-    log_info ""
-
-    log_info "# Undo or clean up this build with the following commands:"
-    log_info "#   git checkout develop"
-
-    for branch in $FEATURE_BRANCHES; do
-      log_info "#   git branch -D $branch"
-    done
-
-    log_info "#   git branch -D $BUILD_BRANCH"
-    log_info ""
+  if [ $ENVIRONMENT = "production" ]; then
+    log_cleanup "git branch -D master"
+    log_cleanup "git checkout master"
+    log_cleanup "git branch -D develop"
+    log_cleanup "git tag -d $VERSION"
+    log_cleanup "git checkout develop"
   fi
+
+  log_cleanup "rm $CLEANUP_FILE"
+
+  log_info "# Undo or cleanup this build with the following command:"
+  log_info "#   ./$CLEANUP_FILE"
+  log_info ""
 
   if [ $random -eq 1 ]; then
     log_info "# May the odds be ever in your favor!"
@@ -220,6 +185,78 @@ function show_finale {
     log_info "# May the force be with you!"
   else
     log_info "# Good luck, soldier!"
+  fi
+}
+
+function show_finale {
+  if [ ${#MERGED_BRANCHES[@]} -eq 0 ]; then
+    log_warn "# Achievement unlocked: ALL PULL REQUESTS FAILED!!!"
+    log_warn ""
+  elif [ $ENVIRONMENT = "production" ]; then
+    log_info "# Complete this build with the following commands:"
+
+    for branch in ${MERGED_BRANCHES[@]}; do
+      if [ $branch != $BUILD_BRANCH ]; then
+        log_info "#   git checkout $branch"
+        log_info "#   git push --force-with-lease origin $branch"
+        log_info "#"
+      fi
+    done
+
+    for branch in ${UNMERGED_BRANCHES[@]}; do
+      if [ $branch != $BUILD_BRANCH ]; then
+        log_warn "#   git checkout develop"
+        log_warn "#   git merge --no-edit --no-ff $branch"
+        log_warn "#   git checkout $branch"
+        log_warn "#   git push --force-with-lease origin $branch"
+        log_warn "#"
+      fi
+    done
+
+    for branch in ${UNREBASED_BRANCHES[@]}; do
+      log_warn "#   git checkout $branch"
+      log_warn "#   git rebase develop"
+      log_warn "#   git checkout develop"
+      log_warn "#   git merge --no-edit --no-ff $branch"
+      log_warn "#   git checkout $branch"
+      log_warn "#   git push --force-with-lease origin $branch"
+      log_warn "#"
+    done
+
+    if [ ${#UNREBASED_BRANCHES[@]} -eq 0 ] && [ ${#UNMERGED_BRANCHES[@]} -eq 0 ]; then
+      log_info "#   git checkout develop"
+      log_info "#   git push origin develop"
+      log_info "#   git checkout $BUILD_BRANCH"
+      log_info "#   git push origin $BUILD_BRANCH"
+      log_info "#   git checkout master"
+      log_info "#   git push origin master"
+      log_info "#   git push origin $VERSION"
+      log_info ""
+    else
+      if [ ${#UNMERGED_BRANCHES[@]} -eq 0 ] || [ ${UNMERGED_BRANCHES[@]: -1} != $BUILD_BRANCH ]; then
+        log_warn "#   git checkout develop"
+        log_warn "#   git checkout -b $BUILD_BRANCH"
+      fi
+
+      log_warn "#   git checkout master"
+      log_warn "#   git merge --no-edit --no-ff $BUILD_BRANCH"
+      log_warn "#   git tag $VERSION"
+      log_warn "#"
+    fi
+  elif [ ${#UNMERGED_BRANCHES[@]} -gt 0 ]; then
+    log_warn "# Complete this build with the following commands:"
+    log_warn "#   git checkout $BUILD_BRANCH"
+
+    for branch in ${UNMERGED_BRANCHES[@]}; do
+      log_warn "#   git merge --no-edit --no-ff $branch"
+    done
+
+    log_warn "#   git push origin $BUILD_BRANCH"
+    log_warn ""
+  else
+    log_info "# Complete this build with the following command:"
+    log_info "#   git push origin $BUILD_BRANCH"
+    log_info ""
   fi
 }
 
@@ -246,6 +283,11 @@ function show_rebase_conflicts {
 }
 
 parse_cli_arguments $@
+
+CLEANUP_FILE="cleanup-$ENVIRONMENT.$VERSION.sh"
+> $CLEANUP_FILE # Empty the cleanup file
+
+chmod +x $CLEANUP_FILE
 parse_feature_branches $@
 
 LOG_FILE="$ENVIRONMENT.$VERSION.log"
@@ -254,13 +296,10 @@ LOG_FILE="$ENVIRONMENT.$VERSION.log"
 log_info "# Building $BUILD_BRANCH for deployment to $ENVIRONMENT"
 
 execute_or_die "git fetch origin"
-
-for branch in $FEATURE_BRANCHES; do
-  execute_or_die "git checkout $branch"
-done
-
 execute_or_die "git checkout master"
+execute_or_die "git merge origin/master"
 execute_or_die "git checkout develop"
+execute_or_die "git merge origin/develop"
 
 MERGED_BRANCHES=()
 UNMERGED_BRANCHES=()
@@ -269,10 +308,11 @@ UNREBASED_BRANCHES=()
 if [ $ENVIRONMENT = "production" ]; then
   for branch in $FEATURE_BRANCHES; do
     execute_or_die "git checkout $branch"
+    execute_or_die "git merge origin/$branch"
     rebase_and_merge_or_abort $branch "develop"
   done
 
-  if [ ${#MERGED_BRANCHES[@]} -ne 0 ]; then
+  if [ ${#UNREBASED_BRANCHES[@]} -eq 0 ] && [ ${#UNMERGED_BRANCHES[@]} -eq 0 ]; then
     execute_or_die "git checkout develop"
     execute_or_die "git checkout -b $BUILD_BRANCH"
 
@@ -289,6 +329,7 @@ else
 
   for branch in $FEATURE_BRANCHES; do
     execute_or_die "git checkout $branch"
+    execute_or_die "git merge origin/$branch"
     merge_or_abort $branch $BUILD_BRANCH
   done
 fi
@@ -296,3 +337,4 @@ fi
 show_rebase_conflicts
 show_merge_conflicts
 show_finale
+show_cleanup

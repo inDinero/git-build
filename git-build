@@ -2,7 +2,7 @@
 
 function die {
   if [ -z "$1" ]; then
-    echo "git-build v0.3"
+    echo "git-build v0.4.0"
     echo "Usage: ./git-build [-e <production|staging>] [-v <sub_version_number>] [INPUT_FILE]"
   else
     log_error $@

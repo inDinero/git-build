@@ -2,6 +2,94 @@
 
 APP_NAME="git-build"
 APP_VERSION="v1.0.0"
+INSTALLER_URL_CURL="https://curl.haxx.se/download.html"
+INSTALLER_URL_GIT="https://git-scm.com/downloads/"
+INSTALLER_URL_GEM="https://rubygems.org/pages/download/"
+INSTALLER_URL_LARGA="http://172.30.50.113/larga"
+INSTALLER_URL_VI="http://www.vim.org/download.php"
+LOG_FILE="/dev/null"
+SLACK_WEBHOOK="https://hooks.slack.com/services/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"
+
+function deploy {
+  if [ -z "$ENVIRONMENT" ]; then
+    die "Cannot deploy: deployment environment not found!"
+  elif [ "$ENVIRONMENT" = "integration" ]; then
+    local subdomain="integration"
+    local endpoint="$subdomain.indinerocorp.com"
+
+    send_larga_deploy_message "#builds" "<!channel> Deployment to <https://$endpoint|integration> started..."
+
+    PREVIOUS_BRANCH=`larga -action show -branch placeholder | grep https://$endpoint | awk '{print $1}'`
+
+    local deployment_action="build"
+
+    if [ -n "$PREVIOUS_BRANCH" ]; then
+      if [ "$PREVIOUS_BRANCH" = "$BUILD_BRANCH" ]; then
+        deployment_action="deploy"
+      else
+        log_info "Destroying current staging instance $PREVIOUS_BRANCH..."
+        execute_or_die "larga -action destroy -branch $PREVIOUS_BRANCH"
+      fi
+    fi
+
+    local bundle_command
+
+    local remote_command="cd /home/deploy/indinero/current; RAILS_ENV=staging /home/deploy/.rbenv/shims/bundle exec"
+    local ssh_options="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+    log_info "Deploying $BUILD_BRANCH into staging..."
+
+    if [ "$BRANCH" = "hotfix" ]; then
+      execute_or_die "larga -action $deployment_action -branch $BUILD_BRANCH"
+    elif [ "$BRANCH" = "stage" ]; then
+      execute_or_die "larga -action $deployment_action -branch $BUILD_BRANCH -hostname $subdomain -lifespan 3d"
+    else
+      die "Cannot deploy: unknown branch $BRANCH"
+    fi
+
+    bundle_command="script/delayed_job start"
+    execute_or_die "ssh $ssh_options deploy@$subdomain.indinerocorp.com 'sh -l -c \"$remote_command $bundle_command\"'"
+
+    bundle_command="rake ey_deploy:announce_deployment_end[integration]"
+    execute_or_die "ssh $ssh_options deploy@$subdomain.indinerocorp.com 'sh -l -c \"$remote_command $bundle_command\"'"
+
+    if [ "$BRANCH" = "stage" ]; then
+      # Added nohup
+      remote_command="cd /home/deploy/indinero/current; RAILS_ENV=staging nohup /home/deploy/.rbenv/shims/bundle exec"
+      bundle_command="rake ey_deploy:run_outstanding_tasks[integration] &>/dev/null &"
+      execute_or_die "ssh $ssh_options deploy@$subdomain.indinerocorp.com 'sh -l -c \"$remote_command $bundle_command\"'"
+    fi
+  elif [ "$ENVIRONMENT" = "production" ]; then
+    if [ "$BRANCH" = "hotfix" ] || [ "$BRANCH" = "release" ]; then
+      execute_or_die "ey login"
+
+      execute_or_die "git checkout develop"
+      execute_or_die "git merge --no-edit --no-ff $BUILD_BRANCH"
+      execute_or_die "git push origin develop"
+
+      execute_or_die "git checkout master"
+      execute_or_die "git merge --no-edit --no-ff $BUILD_BRANCH"
+      execute_or_die "git push origin master"
+
+      if [ "$BRANCH" = "release" ]; then
+        execute_or_die "git tag $VERSION"
+        execute_or_die "git push origin $VERSION"
+      fi
+
+      execute_or_die "ey deploy -e indinero3_production -m 'rake db:migrate' -r master"
+    else
+      die "Cannot deploy: unknown branch $BRANCH"
+    fi
+  elif [ "$ENVIRONMENT" = "staging" ]; then
+    if [ "$BRANCH" = "release" ]; then
+      execute_or_die "ey login"
+      execute_or_die "ey deploy -e staging_v3 -m 'rake db:migrate' -r $BUILD_BRANCH"
+    else
+      die "Cannot deploy: unknown branch $BRANCH"
+    fi
+  else
+    die "Cannot deploy: unknown deployment environment $ENVIRONMENT"
+  fi
+}
 
 function die {
   if [ -z "$1" ]; then
@@ -13,6 +101,8 @@ function die {
     echo "\tOperation to perform: append, create (REQUIRED)"
     echo "  -b|--branch string"
     echo "\tType of branch to build: hotfix, release, stage (REQUIRED)"
+    echo "  -e|--environment string"
+    echo "\tDestination environment: integration, production, staging (on deploy; REQUIRED for hotfix and release)"
     echo "  -f|--flag integer"
     echo "\tIncrementing flag (non-zero REQUIRED for hotfix, default: 0)"
     echo "  -v|--version yy.m.d"
@@ -28,7 +118,7 @@ function die {
 function execute {
   log_info $@
 
-  raw_output=`$@ 2>&1`
+  raw_output=$(eval $@ 2>&1)
   return_code=$?
 
   while read -r line_output; do
@@ -37,9 +127,15 @@ function execute {
 }
 
 function execute_or_die {
-  execute $@
+  execute $1
+
   if [ $return_code -ne 0 ]; then
-    die "Git error! (status code: $?)"
+    if [ $# -eq 1 ]; then
+      die "git-build encountered an error and cannot proceed! (status code: $?)"
+    fi
+
+    shift
+    die $@
   fi
 }
 
@@ -49,11 +145,13 @@ function initialize_files {
   chmod +x $CLEANUP_FILE
 
   LOG_FILE="$BRANCH-$VERSION.log"
-  >> $LOG_FILE # Create the log file, if it does not yet exist
-
   if [ $ACTION = "append" ]; then
+    echo "" > $LOG_FILE # Insert a blank line, to separate log entries per "session"
+
     local action="Appending to"
   elif [ $ACTION = "create" ]; then
+    > $LOG_FILE # Create a blank log file
+
     local action="Creating"
   fi
 
@@ -64,27 +162,45 @@ function initialize_local_branches {
   log_info "# Cleaning / setting up local branches"
 
   if [ $ACTION = "append" ]; then
+    execute_or_die "git checkout develop"
+
+    execute "git branch -D $BUILD_BRANCH"
     execute_or_die "git checkout $BUILD_BRANCH"
   elif [ $ACTION = "create" ]; then
     if [ "$BRANCH" = "hotfix" ]; then
       execute_or_die "git checkout develop"
-      execute "git branch -D master"
 
+      execute "git branch -D master"
       execute_or_die "git checkout master"
+
       execute_or_die "git checkout -b $BUILD_BRANCH"
     else
       execute_or_die "git checkout master"
-      execute "git branch -D develop"
 
+      execute "git branch -D develop"
       execute_or_die "git checkout develop"
+
       execute_or_die "git checkout -b $BUILD_BRANCH"
     fi
+  elif [ $ACTION = "deploy" ]; then
+    execute_or_die "git checkout master"
+
+    execute "git branch -D develop"
+    execute_or_die "git checkout develop"
+
+    execute "git branch -D $BUILD_BRANCH"
+    execute_or_die "git checkout $BUILD_BRANCH"
+
+    execute "git branch -D master"
+    execute_or_die "git checkout master"
   fi
 
-  for branch in $FEATURE_BRANCHES; do
-    execute "git branch -D $branch"
-    execute_or_die "git checkout $branch"
-  done
+  if [ ${#FEATURE_BRANCHES[@]} -ne 0 ]; then
+    for branch in $FEATURE_BRANCHES; do
+      execute "git branch -D $branch"
+      execute_or_die "git checkout $branch"
+    done
+  fi
 }
 
 function log_cleanup {
@@ -131,6 +247,7 @@ function merge_or_abort {
 function parse_cli_arguments {
   ACTION=""
   BRANCH=""
+  ENVIRONMENT=""
   FLAG=0
   INPUT_FILE=""
   VERSION=""
@@ -147,7 +264,7 @@ function parse_cli_arguments {
           ACTION=""
         fi
 
-        if [ $ACTION != "append" ] && [ $ACTION != "create" ]; then
+        if [ $ACTION != "append" ] && [ $ACTION != "create" ] && [ $ACTION != "deploy" ]; then
           die
         fi
 
@@ -161,6 +278,19 @@ function parse_cli_arguments {
         fi
 
         if [ $BRANCH != "hotfix" ] && [ $BRANCH != "release" ] && [ $BRANCH != "stage" ]; then
+          die
+        fi
+
+        shift
+        ;;
+      -e|--environment)
+        if [ -z $ENVIRONMENT ]; then
+          ENVIRONMENT="$2"
+        else
+          ENVIRONMENT=""
+        fi
+
+        if [ $ENVIRONMENT != "integration" ] && [ $ENVIRONMENT != "production" ] && [ $ENVIRONMENT != "staging" ]; then
           die
         fi
 
@@ -215,8 +345,26 @@ function parse_cli_arguments {
 
   if [ -z $ACTION ] || [ -z $BRANCH ]; then
     die
+  elif [ "$ACTION" = "deploy" ]; then
+    # On blank ENVIRONMENT, default to integration if BRANCH=stage
+    if [ -z "$ENVIRONMENT" ]; then
+      if [ "$BRANCH" = "stage" ]; then
+        ENVIRONMENT="integration"
+      else
+        die
+      fi
+    fi
+
+    if [ "$BRANCH" = "hotfix" ] && [ "$ENVIRONMENT" != "integration" ] && [ "$ENVIRONMENT" != "production" ] ; then
+      die
+    elif [ "$BRANCH" = "release" ] && [ "$ENVIRONMENT" != "production" ] && [ "$ENVIRONMENT" != "staging" ]; then
+      die
+    elif [ "$BRANCH" = "stage" ] && [ "$ENVIRONMENT" != "integration" ]; then
+      die
+    fi
   fi
 
+  # If not provided, auto-generate VERSION based on BRANCH
   if [ -z $VERSION ]; then
     if [ "$BRANCH" = "hotfix" ]; then
       # Use previous Monday, except if run on Monday after 12PM Monday, in which case, use current Monday
@@ -236,6 +384,7 @@ function parse_cli_arguments {
     fi
   fi
 
+  # non-zero FLAG is required if BRANCH = hotfix
   if [ $FLAG -ne 0 ]; then
     VERSION="$VERSION.$FLAG"
   elif [ "$BRANCH" = "hotfix" ]; then
@@ -252,13 +401,13 @@ function parse_feature_branches {
     echo "" > $INPUT_FILE
     echo "# Please enter the list of feature branches to be deployed." >> $INPUT_FILE
     echo "# Lines starting with '#' will be ignored, and an empty message aborts the script." >> $INPUT_FILE
-    vi $INPUT_FILE
+    vim $INPUT_FILE
 
     log_cleanup "rm -f $INPUT_FILE"
   fi
 
   FEATURE_BRANCHES=`sed 's/#.*$//' $INPUT_FILE | grep -E -v "^[[:space:]]*$" | awk '{print $1}'`
-  if [ -z "$FEATURE_BRANCHES" ]; then
+  if [ ${#FEATURE_BRANCHES[@]} -eq 0 ]; then
     die "No feature branches found!"
   fi
 }
@@ -284,6 +433,17 @@ function rebase_and_merge_or_abort {
       execute_or_die "git push --force-with-lease origin $1"
     fi
   fi
+}
+
+function send_larga_deploy_message {
+  local channel="\"channel\":\"$1\""
+  shift
+
+  local icon="\"icon_emoji\":\":engineyard:\""
+  local text="\"text\":\"$@\""
+  local user="\"username\":\"ey-deploy\""
+
+  curl -X POST -d payload="{$channel,$icon,$text,$user}" $SLACK_WEBHOOK
 }
 
 function show_cleanup {
@@ -402,38 +562,80 @@ function show_rebase_conflicts {
   fi
 }
 
+function validate_dependencies {
+  local error_message
+  log_info "Validating dependencies..."
+
+  error_message="Git not found! Download the installer from $INSTALLER_URL_GIT"
+  execute_or_die "type git" $error_message
+
+  error_message="Vim not found! Download the installer from $INSTALLER_URL_VI"
+  execute_or_die "type vim" $error_message
+
+  if [ "$ACTION" = "deploy" ]; then
+    if [ "$ENVIRONMENT" = "integration" ]; then
+      error_message="Larga not found! Download the latest from $INSTALLER_URL_LARGA"
+      execute_or_die "type larga" $error_message
+
+      execute "larga -action show -branch placeholder | grep -q 'DEPRECATION NOTICE'"
+      if [ $return_code -eq 0 ]; then
+        die "Larga is outdated! Download the latest from $INSTALLER_URL_LARGA"
+      fi
+
+      error_message="Curl not found! Download the latest from $INSTALLER_URL_CURL"
+      execute_or_die "type curl" $error_message
+    else
+      error_message="RubyGems not found! Download the latest from $INSTALLER_URL_GEM"
+      execute_or_die "type gem" $error_message
+
+      error_message="EngineYard gem not found! Download the latest with 'gem install engineyard'"
+      execute_or_die "gem list -i engineyard" $error_message
+    fi
+  fi
+}
+
 parse_cli_arguments $@
-initialize_files
+validate_dependencies
+initialize_files # actual logging starts here
 
 execute_or_die "git fetch origin"
-count=`git branch -a | grep -c $BUILD_BRANCH`
-
-if [ $ACTION = "append" ] && [ $count -eq 0 ]; then
+if git branch -r | grep -q $BUILD_BRANCH; then
+  if [ $ACTION = "create" ] && [ $count -ne 0 ]; then
+    die "Cannot create already-existing branch: $BUILD_BRANCH"
+  fi
+elif [ $ACTION = "append" ]; then
   die "Cannot append to non-existent branch: $BUILD_BRANCH"
-elif [ $ACTION = "create" ] && [ $count -ne 0 ]; then
-  die "Cannot create already-existing branch: $BUILD_BRANCH"
+elif [ $ACTION = "deploy" ]; then
+  die "Cannot deploy non-existent branch: $BUILD_BRANCH"
 fi
 
-parse_feature_branches $@
+if [ $ACTION != "deploy" ]; then
+  parse_feature_branches $@
+fi
+
 initialize_local_branches
 
-MERGED_BRANCHES=()
-UNMERGED_BRANCHES=()
-UNREBASED_BRANCHES=()
-
-if [ "$BRANCH" = "stage" ]; then
-  for branch in $FEATURE_BRANCHES; do
-    merge_or_abort $branch $BUILD_BRANCH
-  done
+if [ $ACTION = "deploy" ]; then
+  deploy
 else
-  for branch in $FEATURE_BRANCHES; do
-    rebase_and_merge_or_abort $branch $BUILD_BRANCH
-  done
+  MERGED_BRANCHES=()
+  UNMERGED_BRANCHES=()
+  UNREBASED_BRANCHES=()
+
+  if [ "$BRANCH" = "stage" ]; then
+    for branch in $FEATURE_BRANCHES; do
+      merge_or_abort $branch $BUILD_BRANCH
+    done
+  else
+    for branch in $FEATURE_BRANCHES; do
+      rebase_and_merge_or_abort $branch $BUILD_BRANCH
+    done
+  fi
+
+  execute_or_die "git push origin $BUILD_BRANCH"
+
+  show_rebase_conflicts
+  show_merge_conflicts
+  show_finale
+  show_cleanup
 fi
-
-execute_or_die "git push origin $BUILD_BRANCH"
-
-show_rebase_conflicts
-show_merge_conflicts
-show_finale
-show_cleanup

@@ -364,7 +364,7 @@ function parse_cli_arguments {
     fi
   fi
 
-  # If not provided, auto-generate VERSION based on BRANCH
+  # If not provided, auto-generate VERSION based on ACTION and BRANCH
   if [ -z $VERSION ]; then
     if [ "$BRANCH" = "hotfix" ]; then
       # Use previous Monday, except if run on Monday after 12PM Monday, in which case, use current Monday
@@ -373,12 +373,20 @@ function parse_cli_arguments {
 
       VERSION="$year_and_month.$week_of_month"
     elif [ "$BRANCH" = "release" ]; then
-      # Use next Monday, except if run on Monday before 12PM, in which case, use current Monday
-      local year_and_month=`date -v +12H -v +Mon +%y.%-m`
-      local week_of_month=$((($(date -v +12H -v +Mon +%-d)-1)/7+1))
+      if [ "$ACTION" = "deploy" ]; then
+        # Use previous Monday, except if run on Monday after 12PM Monday, in which case, use current Monday
+        local year_and_month=`date -v +12H -v -Mon +%y.%-m`
+        local week_of_month=$((($(date -v +12H -v -Mon +%-d)-1)/7+1))
 
-      FLAG=0 # always ignore flag for release branches
-      VERSION="$year_and_month.$week_of_month"
+        VERSION="$year_and_month.$week_of_month"
+      else
+        # Use next Monday, except if run on Monday before 12PM, in which case, use current Monday
+        local year_and_month=`date -v +12H -v +Mon +%y.%-m`
+        local week_of_month=$((($(date -v +12H -v +Mon +%-d)-1)/7+1))
+
+        FLAG=0 # always ignore flag for release branches
+        VERSION="$year_and_month.$week_of_month"
+      fi
     elif [ "$BRANCH" = "stage" ]; then
       VERSION=`date +%y.%-m.%-d`
     fi

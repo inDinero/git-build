@@ -95,7 +95,7 @@ function die {
   if [ -z "$1" ]; then
     echo "$APP_NAME $APP_VERSION"
     echo "================"
-    echo "Usage: git-build [-a|--action <create|append>] [-b|--branch <hotfix|release|stage>] [-f|--flag <flag>] [-v|--version <version>]"
+    echo "Usage: git-build [-a|--action <create|append>] [-t|--type <hotfix|release|stage>] [-f|--flag <flag>] [-v|--version <version>]"
     echo ""
     echo "  -a|--action string"
     echo "\tOperation to perform: append, create, deploy (REQUIRED)"

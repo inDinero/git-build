@@ -1,7 +1,7 @@
 #!/bin/sh
 
 APP_NAME="git-build"
-APP_VERSION="v1.0.0"
+APP_VERSION="v1.0.1"
 INSTALLER_URL_CURL="https://curl.haxx.se/download.html"
 INSTALLER_URL_GIT="https://git-scm.com/downloads/"
 INSTALLER_URL_GEM="https://rubygems.org/pages/download/"
@@ -386,10 +386,13 @@ function parse_cli_arguments {
     fi
   fi
 
-  if [ "$BRANCH_TYPE" != "release" ] || [ $FLAG -ne 0 ]; then
-    VERSION="$VERSION.$FLAG" # always ignore flag for release branches
-  elif [ "$BRANCH_TYPE" = "hotfix" ]; then
-    die # non-zero FLAG is required if BRANCH = hotfix
+  # always ignore flag for release branches
+  if [ "$BRANCH_TYPE" != "release" ]; then
+    if [ $FLAG -ne 0 ]; then
+      VERSION="$VERSION.$FLAG"
+    elif [ "$BRANCH_TYPE" = "hotfix" ]; then
+      die # non-zero FLAG is required if BRANCH = hotfix
+    fi
   fi
 
   BUILD_BRANCH="$BRANCH_TYPE/$VERSION"

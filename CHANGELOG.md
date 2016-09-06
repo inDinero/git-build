@@ -2,6 +2,17 @@
 All notable changes to this project will be documented in this file.
 This project adheres to [Semantic Versioning](http://semver.org/).
 
+## 1.0.1 - 2016-09-06
+* Modify help text
+  * Add "deploy" to options for -a|--action
+  * Add "-i|--input-file string List of feature branches to build (optional; ignored on deploy)"
+* Modify options
+  * Change from -b|--branch to -t|--type
+* Fix behaviour
+  * Incorrect behaviour when pre-existing branch detected on ACTION=create; remove " && [ $count -ne 0 ]" on line 611
+  * When ACTION=deploy, BRANCH=release && ENVIRONMENT=staging, deploys previous instead of upcoming release
+  * Remove show_finale, superseded by -a deploy option
+
 ## 1.0.0 - 2016-08-30
 * Release branches
   * Support creation of release branches

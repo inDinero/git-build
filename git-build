@@ -1,7 +1,7 @@
 #!/bin/sh
 
 APP_NAME="git-build"
-APP_VERSION="v1.0.0"
+APP_VERSION="v1.0.1"
 INSTALLER_URL_CURL="https://curl.haxx.se/download.html"
 INSTALLER_URL_GIT="https://git-scm.com/downloads/"
 INSTALLER_URL_GEM="https://rubygems.org/pages/download/"
@@ -38,12 +38,12 @@ function deploy {
     local ssh_options="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
     log_info "Deploying $BUILD_BRANCH into staging..."
 
-    if [ "$BRANCH" = "hotfix" ]; then
+    if [ "$BRANCH_TYPE" = "hotfix" ]; then
       execute_or_die "larga -action $deployment_action -branch $BUILD_BRANCH"
-    elif [ "$BRANCH" = "stage" ]; then
+    elif [ "$BRANCH_TYPE" = "stage" ]; then
       execute_or_die "larga -action $deployment_action -branch $BUILD_BRANCH -hostname $subdomain -lifespan 3d"
     else
-      die "Cannot deploy: unknown branch $BRANCH"
+      die "Cannot deploy: unknown branch type $BRANCH_TYPE"
     fi
 
     bundle_command="script/delayed_job start"
@@ -52,14 +52,14 @@ function deploy {
     bundle_command="rake ey_deploy:announce_deployment_end[integration]"
     execute_or_die "ssh $ssh_options deploy@$subdomain.indinerocorp.com 'sh -l -c \"$remote_command $bundle_command\"'"
 
-    if [ "$BRANCH" = "stage" ]; then
+    if [ "$BRANCH_TYPE" = "stage" ]; then
       # Added nohup
       remote_command="cd /home/deploy/indinero/current; RAILS_ENV=staging nohup /home/deploy/.rbenv/shims/bundle exec"
       bundle_command="rake ey_deploy:run_outstanding_tasks[integration] &>/dev/null &"
       execute_or_die "ssh $ssh_options deploy@$subdomain.indinerocorp.com 'sh -l -c \"$remote_command $bundle_command\"'"
     fi
   elif [ "$ENVIRONMENT" = "production" ]; then
-    if [ "$BRANCH" = "hotfix" ] || [ "$BRANCH" = "release" ]; then
+    if [ "$BRANCH_TYPE" = "hotfix" ] || [ "$BRANCH_TYPE" = "release" ]; then
       execute_or_die "ey login"
 
       execute_or_die "git checkout develop"
@@ -70,21 +70,21 @@ function deploy {
       execute_or_die "git merge --no-edit --no-ff $BUILD_BRANCH"
       execute_or_die "git push origin master"
 
-      if [ "$BRANCH" = "release" ]; then
+      if [ "$BRANCH_TYPE" = "release" ]; then
         execute_or_die "git tag $VERSION"
         execute_or_die "git push origin $VERSION"
       fi
 
       execute_or_die "ey deploy -e indinero3_production -m 'rake db:migrate' -r master"
     else
-      die "Cannot deploy: unknown branch $BRANCH"
+      die "Cannot deploy: unknown branch type $BRANCH_TYPE"
     fi
   elif [ "$ENVIRONMENT" = "staging" ]; then
-    if [ "$BRANCH" = "release" ]; then
+    if [ "$BRANCH_TYPE" = "release" ]; then
       execute_or_die "ey login"
       execute_or_die "ey deploy -e staging_v3 -m 'rake db:migrate' -r $BUILD_BRANCH"
     else
-      die "Cannot deploy: unknown branch $BRANCH"
+      die "Cannot deploy: unknown branch type $BRANCH_TYPE"
     fi
   else
     die "Cannot deploy: unknown deployment environment $ENVIRONMENT"
@@ -95,16 +95,18 @@ function die {
   if [ -z "$1" ]; then
     echo "$APP_NAME $APP_VERSION"
     echo "================"
-    echo "Usage: git-build [-a|--action <create|append>] [-b|--branch <hotfix|release|stage>] [-f|--flag <flag>] [-v|--version <version>]"
+    echo "Usage: git-build [-a|--action <create|append>] [-t|--type <hotfix|release|stage>] [-f|--flag <flag>] [-v|--version <version>]"
     echo ""
     echo "  -a|--action string"
-    echo "\tOperation to perform: append, create (REQUIRED)"
-    echo "  -b|--branch string"
-    echo "\tType of branch to build: hotfix, release, stage (REQUIRED)"
+    echo "\tOperation to perform: append, create, deploy (REQUIRED)"
     echo "  -e|--environment string"
     echo "\tDestination environment: integration, production, staging (on deploy; REQUIRED for hotfix and release)"
     echo "  -f|--flag integer"
     echo "\tIncrementing flag (non-zero REQUIRED for hotfix, default: 0)"
+    echo "  -i|--input-file string"
+    echo "\tList of feature branches to build (optional; ignored on deploy)"
+    echo "  -t|--type string"
+    echo "\tType of branch to build: hotfix, release, stage (REQUIRED)"
     echo "  -v|--version yy.m.d"
     echo "\tOptional, version number (default: current date for hotfix and stage, next Monday for release)"
     echo ""
@@ -140,11 +142,11 @@ function execute_or_die {
 }
 
 function initialize_files {
-  CLEANUP_FILE="cleanup-$BRANCH-$VERSION.sh"
+  CLEANUP_FILE="cleanup-$BRANCH_TYPE-$VERSION.sh"
   >> $CLEANUP_FILE # Create the cleanup file, if it does not yet exist
   chmod +x $CLEANUP_FILE
 
-  LOG_FILE="$BRANCH-$VERSION.log"
+  LOG_FILE="$BRANCH_TYPE-$VERSION.log"
   if [ $ACTION = "append" ]; then
     echo "" > $LOG_FILE # Insert a blank line, to separate log entries per "session"
 
@@ -167,7 +169,7 @@ function initialize_local_branches {
     execute "git branch -D $BUILD_BRANCH"
     execute_or_die "git checkout $BUILD_BRANCH"
   elif [ $ACTION = "create" ]; then
-    if [ "$BRANCH" = "hotfix" ]; then
+    if [ "$BRANCH_TYPE" = "hotfix" ]; then
       execute_or_die "git checkout develop"
 
       execute "git branch -D master"
@@ -246,7 +248,7 @@ function merge_or_abort {
 
 function parse_cli_arguments {
   ACTION=""
-  BRANCH=""
+  BRANCH_TYPE=""
   ENVIRONMENT=""
   FLAG=0
   INPUT_FILE=""
@@ -270,14 +272,14 @@ function parse_cli_arguments {
 
         shift
         ;;
-      -b|--branch)
-        if [ -z $BRANCH ]; then
-          BRANCH="$2"
+      -t|--type)
+        if [ -z $BRANCH_TYPE ]; then
+          BRANCH_TYPE="$2"
         else
-          BRANCH=""
+          BRANCH_TYPE=""
         fi
 
-        if [ $BRANCH != "hotfix" ] && [ $BRANCH != "release" ] && [ $BRANCH != "stage" ]; then
+        if [ "$BRANCH_TYPE" != "hotfix" ] && [ "$BRANCH_TYPE" != "release" ] && [ "$BRANCH_TYPE" != "stage" ]; then
           die
         fi
 
@@ -309,7 +311,7 @@ function parse_cli_arguments {
 
         shift
         ;;
-      -i|--input_file)
+      -i|--input-file)
         if [ -z $INPUT_FILE ]; then
           INPUT_FILE="$2"
         else
@@ -343,69 +345,63 @@ function parse_cli_arguments {
     shift
   done
 
-  if [ -z $ACTION ] || [ -z $BRANCH ]; then
+  if [ -z $ACTION ] || [ -z $BRANCH_TYPE ]; then
     die
   elif [ "$ACTION" = "deploy" ]; then
-    # On blank ENVIRONMENT, default to integration if BRANCH=stage
+    # On blank ENVIRONMENT, default to integration if BRANCH_TYPE=stage
     if [ -z "$ENVIRONMENT" ]; then
-      if [ "$BRANCH" = "stage" ]; then
+      if [ "$BRANCH_TYPE" = "stage" ]; then
         ENVIRONMENT="integration"
       else
         die
       fi
     fi
 
-    if [ "$BRANCH" = "hotfix" ] && [ "$ENVIRONMENT" != "integration" ] && [ "$ENVIRONMENT" != "production" ] ; then
+    if [ "$BRANCH_TYPE" = "hotfix" ] && [ "$ENVIRONMENT" != "integration" ] && [ "$ENVIRONMENT" != "production" ] ; then
       die
-    elif [ "$BRANCH" = "release" ] && [ "$ENVIRONMENT" != "production" ] && [ "$ENVIRONMENT" != "staging" ]; then
+    elif [ "$BRANCH_TYPE" = "release" ] && [ "$ENVIRONMENT" != "production" ] && [ "$ENVIRONMENT" != "staging" ]; then
       die
-    elif [ "$BRANCH" = "stage" ] && [ "$ENVIRONMENT" != "integration" ]; then
+    elif [ "$BRANCH_TYPE" = "stage" ] && [ "$ENVIRONMENT" != "integration" ]; then
       die
     fi
   fi
 
   # If not provided, auto-generate VERSION based on ACTION and BRANCH
   if [ -z $VERSION ]; then
-    if [ "$BRANCH" = "hotfix" ]; then
+    if [ "$BRANCH_TYPE" = "stage" ]; then
+      # Use current date
+      VERSION=`date +%y.%-m.%-d`
+    elif [[ "$BRANCH_TYPE" = "release" && ("$ACTION" != "deploy" || "$ENVIRONMENT" = "staging") ]]; then
+      # Use next Monday, except if run on Monday before 12PM, in which case, use current Monday
+      local year_and_month=`date -v +12H -v +Mon +%y.%-m`
+      local week_of_month=$((($(date -v +12H -v +Mon +%-d)-1)/7+1))
+
+      VERSION="$year_and_month.$week_of_month"
+    else
       # Use previous Monday, except if run on Monday after 12PM Monday, in which case, use current Monday
       local year_and_month=`date -v +12H -v -Mon +%y.%-m`
       local week_of_month=$((($(date -v +12H -v -Mon +%-d)-1)/7+1))
 
       VERSION="$year_and_month.$week_of_month"
-    elif [ "$BRANCH" = "release" ]; then
-      if [ "$ACTION" = "deploy" ]; then
-        # Use previous Monday, except if run on Monday after 12PM Monday, in which case, use current Monday
-        local year_and_month=`date -v +12H -v -Mon +%y.%-m`
-        local week_of_month=$((($(date -v +12H -v -Mon +%-d)-1)/7+1))
-
-        VERSION="$year_and_month.$week_of_month"
-      else
-        # Use next Monday, except if run on Monday before 12PM, in which case, use current Monday
-        local year_and_month=`date -v +12H -v +Mon +%y.%-m`
-        local week_of_month=$((($(date -v +12H -v +Mon +%-d)-1)/7+1))
-
-        FLAG=0 # always ignore flag for release branches
-        VERSION="$year_and_month.$week_of_month"
-      fi
-    elif [ "$BRANCH" = "stage" ]; then
-      VERSION=`date +%y.%-m.%-d`
     fi
   fi
 
-  # non-zero FLAG is required if BRANCH = hotfix
-  if [ $FLAG -ne 0 ]; then
-    VERSION="$VERSION.$FLAG"
-  elif [ "$BRANCH" = "hotfix" ]; then
-    die
+  # always ignore flag for release branches
+  if [ "$BRANCH_TYPE" != "release" ]; then
+    if [ $FLAG -ne 0 ]; then
+      VERSION="$VERSION.$FLAG"
+    elif [ "$BRANCH_TYPE" = "hotfix" ]; then
+      die # non-zero FLAG is required if BRANCH = hotfix
+    fi
   fi
 
-  BUILD_BRANCH="$BRANCH/$VERSION"
+  BUILD_BRANCH="$BRANCH_TYPE/$VERSION"
 }
 
 function parse_feature_branches {
   # Get input file, if applicable; generate one, otherwise.
   if [ -z $INPUT_FILE]; then
-    INPUT_FILE="feature-branches-$BRANCH-$VERSION.txt"
+    INPUT_FILE="feature-branches-$BRANCH_TYPE-$VERSION.txt"
     echo "" > $INPUT_FILE
     echo "# Please enter the list of feature branches to be deployed." >> $INPUT_FILE
     echo "# Lines starting with '#' will be ignored, and an empty message aborts the script." >> $INPUT_FILE
@@ -479,75 +475,6 @@ function show_cleanup {
   fi
 }
 
-function show_finale {
-  if [ ${#MERGED_BRANCHES[@]} -eq 0 ]; then
-    log_warn "# Achievement unlocked: ALL PULL REQUESTS FAILED!!!"
-    log_warn ""
-  elif [ "$BRANCH" = "stage" ]; then
-    if [ ${#UNMERGED_BRANCHES[@]} -gt 0 ]; then
-      log_warn "# Complete this build with the following commands:"
-      log_warn "#   git checkout $BUILD_BRANCH"
-
-      for branch in ${UNMERGED_BRANCHES[@]}; do
-        log_warn "#   git merge --no-edit --no-ff $branch"
-      done
-
-      log_warn "#   git push origin $BUILD_BRANCH"
-      log_warn ""
-    fi
-  else
-    if [ ${#UNMERGED_BRANCHES[@]} -ne 0 ] || [ ${#UNREBASED_BRANCHES[@]} -ne 0 ]; then
-      log_warn "# Complete this build with the following commands:"
-
-      for branch in ${UNMERGED_BRANCHES[@]}; do
-        log_warn "#   git checkout $BUILD_BRANCH"
-        log_warn "#   git merge --no-edit --no-ff $branch"
-        log_warn "#   git checkout $branch"
-        log_warn "#   git push --force-with-lease origin $branch"
-        log_warn "#"
-      done
-
-      for branch in ${UNREBASED_BRANCHES[@]}; do
-        log_warn "#   git checkout $branch"
-        log_warn "#   git rebase $BUILD_BRANCH"
-        log_warn "#   git push --force-with-lease origin $branch"
-        log_warn "#   git checkout $BUILD_BRANCH"
-        log_warn "#   git merge --no-edit --no-ff $branch"
-        log_warn "#"
-      done
-
-      log_warn "#   git checkout $BUILD_BRANCH"
-      log_warn "#   git push origin $BUILD_BRANCH"
-    fi
-
-    if [ "$BRANCH" = "hotfix" ]; then
-      log_info "# Before deploying for testing, execute the following commands:"
-      log_info "#   git checkout develop"
-      log_info "#   git merge --no-edit --no-ff $BUILD_BRANCH"
-      log_info "#   git push origin develop"
-      log_info "#"
-
-      log_info "# Before deploying for production, execute the following commands:"
-      log_info "#   git checkout master"
-      log_info "#   git merge --no-edit --no-ff $BUILD_BRANCH"
-      log_info "#   git push origin master"
-      log_info "#"
-    elif [ "$BRANCH" = "release" ]; then
-      log_info "# Before deploying for production, execute the following commands:"
-      log_info "#   git checkout develop"
-      log_info "#   git merge --no-edit --no-ff $BUILD_BRANCH"
-      log_info "#   git push origin develop"
-      log_info "#"
-      log_info "#   git checkout master"
-      log_info "#   git merge --no-edit --no-ff $BUILD_BRANCH"
-      log_info "#   git push origin master"
-      log_info "#"
-      log_info "#   git tag $VERSION"
-      log_info "#   git push origin $VERSION"
-    fi
-  fi
-}
-
 function show_merge_conflicts {
   local branch
   if [ ${#UNMERGED_BRANCHES[@]} -gt 0 ]; then
@@ -555,6 +482,7 @@ function show_merge_conflicts {
     for branch in ${UNMERGED_BRANCHES[@]}; do
       log_warn "#   $branch"
     done
+    log_warn "# To add these branches, use the '-a append' option after fixing the merge conflict(s)."
     log_warn ""
   fi
 }
@@ -566,6 +494,8 @@ function show_rebase_conflicts {
     for branch in ${UNREBASED_BRANCHES[@]}; do
       log_warn "#   $branch"
     done
+    log_warn ""
+    log_warn "# To add these branches, use the '-a append' option after fixing the rebase conflict(s)."
     log_warn ""
   fi
 }
@@ -608,7 +538,7 @@ initialize_files # actual logging starts here
 
 execute_or_die "git fetch origin"
 if git branch -r | grep -q $BUILD_BRANCH; then
-  if [ $ACTION = "create" ] && [ $count -ne 0 ]; then
+  if [ $ACTION = "create" ]; then
     die "Cannot create already-existing branch: $BUILD_BRANCH"
   fi
 elif [ $ACTION = "append" ]; then
@@ -630,7 +560,7 @@ else
   UNMERGED_BRANCHES=()
   UNREBASED_BRANCHES=()
 
-  if [ "$BRANCH" = "stage" ]; then
+  if [ "$BRANCH_TYPE" = "stage" ]; then
     for branch in $FEATURE_BRANCHES; do
       merge_or_abort $branch $BUILD_BRANCH
     done
@@ -644,6 +574,5 @@ else
 
   show_rebase_conflicts
   show_merge_conflicts
-  show_finale
   show_cleanup
 fi

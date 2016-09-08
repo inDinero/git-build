@@ -371,7 +371,7 @@ function parse_cli_arguments {
     if [ "$BRANCH_TYPE" = "stage" ]; then
       # Use current date
       VERSION=`date +%y.%-m.%-d`
-    elif [ "$ACTION" != "deploy" ] && [ "$BRANCH_TYPE" = "release" ]; then
+    elif [[ "$BRANCH_TYPE" = "release" && ("$ACTION" != "deploy" || "$ENVIRONMENT" = "staging") ]]; then
       # Use next Monday, except if run on Monday before 12PM, in which case, use current Monday
       local year_and_month=`date -v +12H -v +Mon +%y.%-m`
       local week_of_month=$((($(date -v +12H -v +Mon +%-d)-1)/7+1))

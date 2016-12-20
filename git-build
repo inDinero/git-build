@@ -91,6 +91,68 @@ SLACK_WEBHOOK="https://hooks.slack.com/services/T03QHBFK6/B0LHB68U8/YF8ZKd5v7ksw
 #   fi
 # }
 
+function autogenerate_build_branch {
+  case "$ACTION" in
+    add-to)
+      autogenerate_integration_branch
+      ;;
+    deploy)
+      case "$BUILD_TYPE" in
+        integration)
+          autogenerate_integration_branch
+          ;;
+        production)
+          BUILD_BRANCH="master"
+          ;;
+        *)
+          BUILD_BRANCH="$BUILD_TYPE/$VERSION"
+          ;;
+      esac
+      ;;
+    finish)
+      case "$BUILD_TYPE" in
+        bugfix)
+          BUILD_BRANCH="hotfix/$VERSION"
+          ;;
+        feature)
+          BUILD_BRANCH="develop"
+          ;;
+        patch)
+          if eval "echo '$VERSION' | grep -E -q -w '.+\.0'"; then
+            BUILD_BRANCH="release/$VERSION"
+          else
+            BUILD_BRANCH="hotfix/$VERSION"
+          fi
+          ;;
+        *)
+          BUILD_BRANCH="$BUILD_TYPE/$VERSION"
+          ;;
+      esac
+      ;;
+    start)
+      case "$BUILD_TYPE" in
+        integration)
+          autogenerate_integration_branch
+          ;;
+        *)
+          BUILD_BRANCH="$BUILD_TYPE/$VERSION"
+          ;;
+      esac
+      ;;
+    update)
+      BUILD_BRANCH="$BUILD_TYPE/$VERSION"
+      ;;
+  esac
+}
+
+function autogenerate_integration_branch {
+  if [ -z $FLAG ]; then
+    BUILD_BRANCH="integration/$VERSION"
+  else
+    BUILD_BRANCH="integration/$VERSION.$FLAG"
+  fi
+}
+
 function die {
   if [ -z "$1" ]; then
     echo "$APP_NAME $APP_VERSION"
@@ -121,10 +183,16 @@ function die {
   exit 1
 }
 
+function die_on_existing_branch {
+  if git branch -r | grep -q $1; then
+    die "Branch $1 already exists"
+  fi
+}
+
 function die_on_invalid_build_type {
   if [ -z $BUILD_TYPE ]; then
     die "Type not found"
-  elif [ -z $1 ] || ! eval "echo $BUILD_TYPE | grep -E -w '$1' > /dev/null"; then
+  elif [ -z $1 ] || ! eval "echo $BUILD_TYPE | grep -E -q -w '$1'"; then
     die "Cannot $ACTION build $BUILD_TYPE"
   fi
 }
@@ -136,9 +204,9 @@ function die_on_invalid_branch_or_version {
     branch_or_version="$VERSION"
   fi
 
-  if [ "$BUILD_TYPE" = "hotfix" ] && eval "echo '$branch_or_version' | grep -E -w '.+\.0' > /dev/null"; then
+  if [ "$BUILD_TYPE" = "hotfix" ] && eval "echo '$branch_or_version' | grep -E -q -w '.+\.0'"; then
     die "Invalid branch or version $branch_or_version"
-  elif [ "$BUILD_TYPE" = "release" ] && eval "echo '$branch_or_version' | grep -E -v -w '.+\.0' > /dev/null"; then
+  elif [ "$BUILD_TYPE" = "release" ] && eval "echo '$branch_or_version' | grep -E -q -v -w '.+\.0'"; then
     die "Invalid branch or version $branch_or_version"
   fi
 }
@@ -146,26 +214,8 @@ function die_on_invalid_branch_or_version {
 function die_on_invalid_environment {
   if [ -z $ENVIRONMENT ]; then
     die "Environment not found"
-  elif [ -z $1 ] || ! eval "echo '$ENVIRONMENT' | grep -E -w '$1' > /dev/null"; then
+  elif [ -z $1 ] || ! eval "echo '$ENVIRONMENT' | grep -E -q -w '$1'"; then
     die "Invalid environment $ENVIRONMENT"
-  fi
-}
-
-function die_on_invalid_input_branches {
-  if [ -z "$INPUT_FILE" ] || [ ! -f "$INPUT_FILE" ]; then
-    local timestamp=`date +%y%m%d%H%M%S`
-    INPUT_FILE="$timestamp-$ACTION-$BUILD_TYPE.txt"
-
-    echo "" > $INPUT_FILE
-    echo "# Please enter the list of feature branches to be deployed." >> $INPUT_FILE
-    echo "# Lines starting with '#' will be ignored, and an empty message aborts the script." >> $INPUT_FILE
-
-    vim $INPUT_FILE
-  fi
-
-  INPUT_BRANCHES=`sed 's/#.*$//' $INPUT_FILE | grep -E -v "^[[:space:]]*$" | awk '{print $1}'`
-  if [ -z "$INPUT_BRANCHES" ]; then
-    die "Input branch(es) not found"
   fi
 }
 
@@ -174,6 +224,12 @@ function die_on_invalid_larga {
     die "Larga not found; download the latest from $INSTALLER_URL_LARGA"
   elif eval "larga -action show -branch placeholder | grep -q 'DEPRECATION NOTICE' > /dev/null"; then
     die "Larga is outdated; download the latest from $INSTALLER_URL_LARGA"
+  fi
+}
+
+function die_on_missing_branch {
+  if ! git branch -r | grep -q "origin/$1"; then
+    die "Branch $1 does not exist"
   fi
 }
 
@@ -201,10 +257,29 @@ function die_on_missing_git {
   fi
 }
 
-function die_on_missing_input_file {
+function die_on_missing_input_branches {
   if [ -z "$INPUT_FILE" ] || [ ! -f "$INPUT_FILE" ]; then
-    die "Input file $INPUT_FILE not found"
+    local timestamp=`date +%y%m%d%H%M%S`
+    INPUT_FILE="$timestamp-$ACTION-$BUILD_TYPE.txt"
+
+    echo "" > $INPUT_FILE
+    echo "# Please enter the list of input branches." >> $INPUT_FILE
+    echo "# Lines starting with '#' will be ignored," >> $INPUT_FILE
+    echo "# and an empty message aborts the script." >> $INPUT_FILE
+
+    vim $INPUT_FILE
   fi
+
+  INPUT_BRANCHES=`sed 's/#.*$//' $INPUT_FILE | grep -E -v "^[[:space:]]*$" | awk '{print $1}'`
+  if [ -z "$INPUT_BRANCHES" ]; then
+    die "Input branch(es) not found"
+  fi
+
+  local branch
+  for branch in $INPUT_BRANCHES; do
+    die_on_missing_branch $branch
+    git branch -D $branch > /dev/null 2>&1
+  done
 }
 
 function die_on_missing_branch_or_version {
@@ -221,48 +296,37 @@ function die_on_missing_vim {
   fi
 }
 
-# function execute {
-#   log_info $@
+function execute {
+  log_info $@
 
-#   raw_output=$(eval $@ 2>&1)
-#   return_code=$?
+  raw_output=$(eval $@ 2>&1)
+  return_code=$?
 
-#   while read -r line_output; do
-#     log_debug $line_output
-#   done <<< "$raw_output"
-# }
+  while read -r line_output; do
+    log_debug $line_output
+  done <<< "$raw_output"
+}
 
-# function execute_or_die {
-#   execute $1
+function execute_or_die {
+  execute $1
 
-#   if [ $return_code -ne 0 ]; then
-#     if [ $# -eq 1 ]; then
-#       die "git-build encountered an error and cannot proceed! (status code: $?)"
-#     fi
+  if [ $return_code -ne 0 ]; then
+    if [ $# -eq 1 ]; then
+      die "git-build encountered an error and cannot proceed! (status code: $?)"
+    fi
 
-#     shift
-#     die $@
-#   fi
-# }
+    shift
+    die $@
+  fi
+}
 
-# function initialize_files {
-#   CLEANUP_FILE="cleanup-$BUILD_TYPE-$VERSION.sh"
-#   >> $CLEANUP_FILE # Create the cleanup file, if it does not yet exist
-#   chmod +x $CLEANUP_FILE
+function initialize_files {
+  CLEANUP_FILE="cleanup-$ACTION-$BUILD_TYPE.sh"
+  >> $CLEANUP_FILE # Create the cleanup file, if it does not yet exist
+  chmod +x $CLEANUP_FILE
 
-#   LOG_FILE="$BUILD_TYPE-$VERSION.log"
-#   if [ $ACTION = "append" ]; then
-#     echo "" > $LOG_FILE # Insert a blank line, to separate log entries per "session"
-
-#     local action="Appending to"
-#   elif [ $ACTION = "create" ]; then
-#     > $LOG_FILE # Create a blank log file
-
-#     local action="Creating"
-#   fi
-
-#   log_info "# $action $BUILD_BRANCH via $APP_NAME $APP_VERSION"
-# }
+  LOG_FILE="$ACTION-$BUILD_TYPE.log"
+}
 
 # function initialize_local_branches {
 #   log_info "# Cleaning / setting up local branches"
@@ -329,26 +393,25 @@ function log_warn {
   echo "\x1B[31m[WARN ] git-build> $@\x1B[39m" | tee -a $LOG_FILE
 }
 
-# function merge_or_abort {
-#   log_info "# Merging $1 to $2"
-#   execute_or_die "git checkout $2"
-#   execute "git merge --no-edit --no-ff $1"
+function merge_or_abort {
+  log_info "# Merging $1 to $2"
+  execute_or_die "git checkout $1"
+  execute_or_die "git checkout $2"
+  execute "git merge --no-edit --no-ff $1"
 
-#   if [ $return_code -ne 0 ]; then
-#     log_warn "# Merge conflict detected for $1"
-#     execute_or_die "git merge --abort"
-#     log_info ""
+  if [ $return_code -ne 0 ]; then
+    log_warn "# Merge conflict detected for $1"
+    execute_or_die "git merge --abort"
+    log_info ""
 
-#     UNMERGED_BRANCHES+=($1)
-#     merge_success=false
-#   else
-#     log_info "# Successfully merged $1 to $2"
-#     log_info ""
+    UNMERGED_BRANCHES+=($1)
+  else
+    log_info "# Successfully merged $1 to $2"
+    log_info ""
 
-#     MERGED_BRANCHES+=($1)
-#     merge_success=true
-#   fi
-# }
+    MERGED_BRANCHES+=($1)
+  fi
+}
 
 function parse_cli_arguments {
   local option
@@ -365,7 +428,7 @@ function parse_cli_arguments {
     option="$1"
     shift
 
-    case $option in
+    case "$option" in
       -a|--action)
         ACTION="$1"
         ;;
@@ -395,23 +458,80 @@ function parse_cli_arguments {
   done
 }
 
-# function parse_feature_branches {
-#   # Get input file, if applicable; generate one, otherwise.
-#   if [ -z $INPUT_FILE]; then
-#     INPUT_FILE="feature-branches-$BUILD_TYPE-$VERSION.txt"
-#     echo "" > $INPUT_FILE
-#     echo "# Please enter the list of feature branches to be deployed." >> $INPUT_FILE
-#     echo "# Lines starting with '#' will be ignored, and an empty message aborts the script." >> $INPUT_FILE
-#     vim $INPUT_FILE
+function perform_add_to {
+  log_info "# Adding branch(es) to $BUILD_BRANCH via $APP_NAME $APP_VERSION..."
 
-#     log_cleanup "rm -f $INPUT_FILE"
-#   fi
+  execute_or_die "git checkout $BUILD_BRANCH"
+  for branch in $INPUT_BRANCHES; do
+    merge_or_abort $branch $BUILD_BRANCH
+  done
+}
 
-#   INPUT_BRANCHES=`sed 's/#.*$//' $INPUT_FILE | grep -E -v "^[[:space:]]*$" | awk '{print $1}'`
-#   if [ ${#INPUT_BRANCHES[@]} -eq 0 ]; then
-#     die "No feature branches found!"
-#   fi
-# }
+function perform_deploy {
+  log_info "# Deploying $BUILD_BRANCH on $ENVIRONMENT via $APP_NAME $APP_VERSION..."
+}
+
+function perform_finish {
+  case "$BUILD_TYPE" in
+    bugfix)
+      log_info "# Merging bugfix(es) into $BUILD_BRANCH via $APP_NAME $APP_VERSION..."
+      ;;
+    feature)
+      log_info "# Merging feature(s) into $BUILD_BRANCH via $APP_NAME $APP_VERSION..."
+      ;;
+    hotfix)
+      log_info "# Merging $BUILD_BRANCH into master and develop via $APP_NAME $APP_VERSION..."
+      ;;
+    patch)
+      log_info "# Merging patch(es) into $BUILD_BRANCH via $APP_NAME $APP_VERSION..."
+      ;;
+    release)
+      log_info "# Merging $BUILD_BRANCH into master and develop via $APP_NAME $APP_VERSION..."
+      ;;
+  esac
+}
+
+function perform_start {
+  log_info "# Creating $BUILD_BRANCH via $APP_NAME $APP_VERSION..."
+
+  case "$BUILD_TYPE" in
+    hotfix)
+      execute_or_die "git checkout master"
+      execute_or_die "git checkout -b $BUILD_BRANCH"
+
+      ACTION="finish"
+      BUILD_TYPE="bugfix"
+
+      # perform_finish
+      ;;
+    integration)
+      if eval "echo '$BUILD_BRANCH' | grep -E -q -w '.+\.0'"; then
+        execute_or_die "git checkout develop"
+      else
+        execute_or_die "git checkout master"
+      fi
+      execute_or_die "git checkout -b $BUILD_BRANCH"
+
+      ACTION="add-to"
+      BUILD_TYPE="integration"
+
+      # perform_add_to
+      ;;
+    release)
+      execute_or_die "git checkout develop"
+      execute_or_die "git checkout -b $BUILD_BRANCH"
+
+      ACTION="finish"
+      BUILD_TYPE="feature"
+
+      # perform_finish
+      ;;
+  esac
+}
+
+function perform_update {
+  log_info "# Updating $BUILD_BRANCH via $APP_NAME $APP_VERSION..."
+}
 
 # function rebase_and_merge_or_abort {
 #   log_info "# Rebasing $1 to $2"
@@ -497,26 +617,58 @@ function parse_cli_arguments {
 #   fi
 # }
 
+function validate_build_branch {
+  BUILD_BRANCH="$BRANCH"
+
+  if [ -z $BUILD_BRANCH ]; then
+    autogenerate_build_branch
+  fi
+
+  if ! eval "git fetch origin"; then
+    die "Unable to fetch from origin"
+  fi
+
+  case "$ACTION" in
+    add-to|deploy|finish|update)
+      die_on_missing_branch $BUILD_BRANCH
+      ;;
+    start)
+      die_on_existing_branch $BUILD_BRANCH
+      ;;
+  esac
+
+  git branch -D $BUILD_BRANCH > /dev/null 2>&1
+}
+
 function validate_cli_arguments {
   if [ -z "$ACTION" ]; then
     die "Action not found"
   fi
 
-  case $ACTION in
+  case "$ACTION" in
     add-to)
       die_on_invalid_build_type "integration"
       die_on_missing_branch_or_version
       ;;
     deploy)
-      case $BUILD_TYPE in
-        hotfix|integration)
+      case "$BUILD_TYPE" in
+        hotfix)
           die_on_invalid_environment "larga|staging"
+          die_on_missing_branch_or_version
+          die_on_invalid_branch_or_version
+          ;;
+        integration)
+          die_on_invalid_environment "larga|staging"
+          die_on_missing_branch_or_version
           ;;
         production)
           ENVIRONMENT="production"
+          BRANCH="master"
           ;;
         release)
           ENVIRONMENT="staging"
+          die_on_missing_branch_or_version
+          die_on_invalid_branch_or_version
           ;;
         *)
           die_on_invalid_build_type ""
@@ -546,17 +698,17 @@ function validate_cli_arguments {
   esac
 }
 
-
 function validate_dependencies {
-  case $ACTION in
-    add-to)
-      die_on_missing_git
+  die_on_missing_git
+
+  case "$ACTION" in
+    add-to|start)
       die_on_missing_vim
       ;;
     deploy)
-      case $BUILD_TYPE in
+      case "$BUILD_TYPE" in
         hotfix|integration)
-          case $ENVIRONMENT in
+          case "$ENVIRONMENT" in
             larga)
               die_on_invalid_larga
               die_on_missing_curl
@@ -574,32 +726,24 @@ function validate_dependencies {
       esac
       ;;
     finish)
-      die_on_missing_git
-      case $BUILD_TYPE in
+      case "$BUILD_TYPE" in
         bugfix|feature|patch)
           die_on_missing_vim
           ;;
       esac
       ;;
-    start)
-      die_on_missing_git
-      die_on_missing_vim
-      ;;
-    update)
-      die_on_missing_git
-      ;;
   esac
 }
 
 function validate_input_branches {
-  case $ACTION in
+  case "$ACTION" in
     add-to|start)
-      die_on_invalid_input_branches
+      die_on_missing_input_branches
       ;;
     finish)
-      case $BUILD_TYPE in
+      case "$BUILD_TYPE" in
         bugfix|feature|patch)
-          die_on_invalid_input_branches
+          die_on_missing_input_branches
           ;;
       esac
       ;;
@@ -641,25 +785,29 @@ parse_cli_arguments $@
 validate_cli_arguments
 validate_dependencies
 validate_input_branches
+validate_build_branch
+
+initialize_files # actual logging starts here
+
+case "$ACTION" in
+  add-to)
+    perform_add_to
+    ;;
+  deploy)
+    perform_deploy
+    ;;
+  finish)
+    perform_finish
+    ;;
+  start)
+    perform_start
+    ;;
+  update)
+    perform_update
+    ;;
+esac
 
 echo "OK"
-
-# initialize_files # actual logging starts here
-
-# execute_or_die "git fetch origin"
-# if git branch -r | grep -q $BUILD_BRANCH; then
-#   if [ $ACTION = "create" ]; then
-#     die "Cannot create already-existing branch: $BUILD_BRANCH"
-#   fi
-# elif [ $ACTION = "append" ]; then
-#   die "Cannot append to non-existent branch: $BUILD_BRANCH"
-# elif [ $ACTION = "deploy" ]; then
-#   die "Cannot deploy non-existent branch: $BUILD_BRANCH"
-# fi
-
-# if [ $ACTION != "deploy" ]; then
-#   parse_feature_branches $@
-# fi
 
 # initialize_local_branches
 

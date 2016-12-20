@@ -1,0 +1,196 @@
+#!/bin/sh
+
+function eval_and_grep {
+  if eval "$ARGS_EVAL" | grep -q "$ARGS_GREP"; then
+    printf "."
+  else
+    printf "\x1B[31m!\x1B[39m"
+  fi
+}
+
+function global_setup {
+  TIMESTAMP=`date +%y%m%d%H%M%S`
+  VERSION=`date +%y.%m.%d`
+
+  echo "Setting up test repository..."
+
+  TEST_REPO_NAME="git-build-test-repo-$TIMESTAMP"
+  mkdir /tmp/$TEST_REPO_NAME
+  cd /tmp/$TEST_REPO_NAME
+  git init --bare > /dev/null 2>&1
+
+  echo "Setting up test environment..."
+
+  TEST_ENV_NAME="git-build-test-env-$TIMESTAMP"
+  mkdir /tmp/$TEST_ENV_NAME
+  cd /tmp/$TEST_ENV_NAME
+  git clone /tmp/$TEST_REPO_NAME > /dev/null 2>&1
+  cd /tmp/$TEST_ENV_NAME/$TEST_REPO_NAME
+
+  echo "Setting up test branches..."
+
+  echo "master" >> branches.txt
+  (git add branches.txt &&git commit -m "Initial commit for master branch" && git push origin master) > /dev/null 2>&1
+
+  (git checkout -b develop) > /dev/null 2>&1
+  echo "develop" >> branches.txt
+  (git commit -a -m "Initial commit for develop branch" && git push origin develop) > /dev/null 2>&1
+
+  echo ""
+}
+
+function local_setup_foo {
+
+
+
+
+
+
+  echo "Setting up branches..."
+
+  BRANCH_BUGFIX="git-build/$TIMESTAMP-bugfix"
+  BRANCH_INTEGRATION="git-build/$TIMESTAMP-integration"
+
+  silent_eval "git checkout develop"
+  silent_eval "git fetch origin"
+
+  silent_eval "git branch -D master"
+  silent_eval "git checkout master"
+
+  silent_eval "git checkout -b $BRANCH_INTEGRATION"
+  silent_eval "git push origin $BRANCH_INTEGRATION"
+
+  silent_eval "git checkout -b $BRANCH_BUGFIX"
+  touch "$TIMESTAMP-bugfix.txt"
+  silent_eval "git add $TIMESTAMP-bugfix.txt"
+  silent_eval "git commit -m 'Added $TIMESTAMP-bugfix.txt'"
+  silent_eval "git push origin $BRANCH_BUGFIX"
+}
+
+function global_teardown {
+  echo ""
+  cd /tmp
+
+  echo "Tearing down test environment..."
+  rm -Rf "/tmp/$TEST_ENV_NAME"
+
+  echo "Tearing down test repository..."
+  rm -Rf "/tmp/$TEST_REPO_NAME"
+
+  echo "OK!"
+}
+
+function local_setup_bugfix {
+  BRANCH_BUGFIX="bugfix/$VERSION"
+  (git checkout master && git checkout -b $BRANCH_BUGFIX) > /dev/null 2>&1
+  echo "$BRANCH_BUGFIX" >> branches.txt
+  (git commit -a -m "Initial commit for bugfix branch" && git push origin $BRANCH_BUGFIX) > /dev/null 2>&1
+}
+
+function local_setup_integration_from_master {
+  BRANCH_INTEGRATION="integration/$VERSION"
+  (git checkout master && git checkout -b $BRANCH_INTEGRATION && git push origin $BRANCH_INTEGRATION) > /dev/null 2>&1
+}
+
+function local_teardown_bugfix {
+  (git checkout master && git branch -D $BRANCH_BUGFIX) > /dev/null 2>&1
+  BRANCH_BUGFIX=""
+}
+
+function local_teardown_integration {
+  (git checkout master && git branch -D $BRANCH_INTEGRATION) > /dev/null 2>&1
+  BRANCH_INTEGRATION=""
+}
+
+function silent_eval {
+  eval "$ARGS_EVAL > /dev/null 2>&1"
+}
+
+function test_offline_validations {
+  printf "Testing offline validations"
+
+  ARGS_EVAL="git-build"
+  ARGS_GREP="\[ERROR\] git-build> Action not found"
+  eval_and_grep
+
+  ARGS_EVAL="git-build -a invalid"
+  ARGS_GREP="\[ERROR\] git-build> Invalid action invalid"
+  eval_and_grep
+
+  ARGS_EVAL="git-build -a add-to"
+  ARGS_GREP="\[ERROR\] git-build> Type not found"
+  eval_and_grep
+
+  ARGS_EVAL="git-build -a add-to -t invalid"
+  ARGS_GREP="\[ERROR\] git-build> Cannot add-to build invalid"
+  eval_and_grep
+
+  ARGS_EVAL="git-build -a add-to -t integration"
+  ARGS_GREP="\[ERROR\] git-build> Branch or version not found"
+  eval_and_grep
+
+  echo "" > input.txt
+  ARGS_EVAL="git-build -a add-to -t integration -b 2.1.0 -i input.txt"
+  ARGS_GREP="\[ERROR\] git-build> Input branch(es) not found"
+  eval_and_grep
+
+  echo "placeholder" > input.txt
+  ARGS_EVAL="git-build -a add-to -t integration -b 2.1.0 -i input.txt"
+  ARGS_GREP="\[ERROR\] git-build> Branch placeholder does not exist"
+  eval_and_grep
+
+  ARGS_EVAL="git-build -a deploy -t hotfix"
+  ARGS_GREP="\[ERROR\] git-build> Environment not found"
+  eval_and_grep
+
+  ARGS_EVAL="git-build -a deploy -t hotfix -e invalid"
+  ARGS_GREP="\[ERROR\] git-build> Invalid environment invalid"
+  eval_and_grep
+
+  ARGS_EVAL="git-build -a finish -t hotfix -v 1.0"
+  ARGS_GREP="\[ERROR\] git-build> Invalid branch or version 1.0"
+  eval_and_grep
+
+  ARGS_EVAL="git-build -a finish -t release -v 1.1"
+  ARGS_GREP="\[ERROR\] git-build> Invalid branch or version 1.1"
+  eval_and_grep
+
+  echo "OK"
+}
+
+function test_online_validations {
+  printf "Testing online validations"
+
+  ARGS_EVAL="git-build -a finish -t hotfix -b invalid"
+  ARGS_GREP="\[ERROR\] git-build> Branch invalid does not exist"
+  eval_and_grep
+
+  echo "develop" > input.txt
+  ARGS_EVAL="git-build -a start -t hotfix -b master -i input.txt"
+  ARGS_GREP="\[ERROR\] git-build> Branch master already exists"
+  eval_and_grep
+
+  echo "OK"
+}
+
+function test_add_to {
+  local_setup_integration_from_master
+  local_setup_bugfix
+  printf "Testing add-to"
+
+  echo "$BRANCH_BUGFIX" > input.txt
+  ARGS_EVAL="git-build -a add-to -t integration -b $BRANCH_INTEGRATION -i input.txt"
+  ARGS_GREP="\[INFO \] git-build> # Successfully merged $BRANCH_BUGFIX to $BRANCH_INTEGRATION"
+  eval_and_grep
+
+  echo "OK"
+  local_teardown_bugfix
+  local_teardown_integration
+}
+
+
+global_setup
+test_offline_validations
+test_online_validations
+test_add_to
+global_teardown

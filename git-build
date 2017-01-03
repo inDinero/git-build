@@ -94,13 +94,10 @@ SLACK_WEBHOOK="https://hooks.slack.com/services/T03QHBFK6/B0LHB68U8/YF8ZKd5v7ksw
 function autogenerate_build_branch {
   case "$ACTION" in
     add-to)
-      autogenerate_integration_branch
+      BUILD_BRANCH="$BUILD_TYPE/$VERSION"
       ;;
     deploy)
       case "$BUILD_TYPE" in
-        integration)
-          autogenerate_integration_branch
-          ;;
         production)
           BUILD_BRANCH="master"
           ;;
@@ -132,7 +129,8 @@ function autogenerate_build_branch {
     start)
       case "$BUILD_TYPE" in
         integration)
-          autogenerate_integration_branch
+          local version=`date +%y.%-m.%-d.%-H.%-M`
+          BUILD_BRANCH="integration/$version"
           ;;
         *)
           BUILD_BRANCH="$BUILD_TYPE/$VERSION"
@@ -145,14 +143,6 @@ function autogenerate_build_branch {
   esac
 }
 
-function autogenerate_integration_branch {
-  if [ -z $FLAG ]; then
-    BUILD_BRANCH="integration/$VERSION"
-  else
-    BUILD_BRANCH="integration/$VERSION.$FLAG"
-  fi
-}
-
 function die {
   if [ -z "$1" ]; then
     echo "$APP_NAME $APP_VERSION"
@@ -163,13 +153,15 @@ function die {
     echo "  -a|--action STRING"
     echo "\tOperation to perform: add-to, deploy, finish, start, update (REQUIRED)"
     echo "  -b|--branch STRING"
-    echo "\tBranch name; overrides -v|--version (and -f|--flag, if applicable)"
+    echo "\tBranch name; overrides -v|--version"
     echo "  -e|--environment STRING"
     echo "\tDestination environment: larga, production, staging (on deploy; REQUIRED for hotfix and integration)"
-    echo "  -f|--flag INTEGER"
-    echo "\tNon-zero incrementing flag"
+    echo "  -f|--from STRING"
+    echo "\tParent branch (on start; REQUIRED for integration)"
     echo "  -i|--input-file STRING"
     echo "\tList of feature branches to build (REQUIRED except on deploy, finish hotfix, finish release and update release)"
+    echo "  -o|--output-file STRING"
+    echo "\tOverride the auto-generated filename for the log file"
     echo "  -t|--type STRING"
     echo "\tType of branch to build or deploy: bugfix, feature, hotfix, integration, production, release (REQUIRED)"
     echo "  -v|--version YY.M.D"
@@ -214,6 +206,8 @@ function die_on_invalid_branch_or_version {
 function die_on_invalid_environment {
   if [ -z $ENVIRONMENT ]; then
     die "Environment not found"
+  elif [ "$ENVIRONMENT" = "test" ]; then
+    > /dev/null # do nothing
   elif [ -z $1 ] || ! eval "echo '$ENVIRONMENT' | grep -E -q -w '$1'"; then
     die "Invalid environment $ENVIRONMENT"
   fi
@@ -224,6 +218,14 @@ function die_on_invalid_larga {
     die "Larga not found; download the latest from $INSTALLER_URL_LARGA"
   elif eval "larga -action show -branch placeholder | grep -q 'DEPRECATION NOTICE' > /dev/null"; then
     die "Larga is outdated; download the latest from $INSTALLER_URL_LARGA"
+  fi
+}
+
+function die_on_invalid_parent_branch {
+  if [ -z $FROM ]; then
+    die "Parent branch not found"
+  elif [ -z $1 ] || ! eval "echo $FROM | grep -E -q -w '$1'"; then
+    die "Cannot branch from parent branch $FROM"
   fi
 }
 
@@ -320,12 +322,20 @@ function execute_or_die {
   fi
 }
 
+function initialize_branch_lists {
+  MERGED_BRANCHES=()
+  UNMERGED_BRANCHES=()
+  UNREBASED_BRANCHES=()
+}
+
 function initialize_files {
   CLEANUP_FILE="cleanup-$ACTION-$BUILD_TYPE.sh"
   >> $CLEANUP_FILE # Create the cleanup file, if it does not yet exist
   chmod +x $CLEANUP_FILE
 
-  LOG_FILE="$ACTION-$BUILD_TYPE.log"
+  if [ "$LOG_FILE" = "/dev/null" ]; then
+    LOG_FILE="$ACTION-$BUILD_TYPE.log"
+  fi
 }
 
 # function initialize_local_branches {
@@ -395,8 +405,6 @@ function log_warn {
 
 function merge_or_abort {
   log_info "# Merging $1 to $2"
-  execute_or_die "git checkout $1"
-  execute_or_die "git checkout $2"
   execute "git merge --no-edit --no-ff $1"
 
   if [ $return_code -ne 0 ]; then
@@ -405,11 +413,13 @@ function merge_or_abort {
     log_info ""
 
     UNMERGED_BRANCHES+=($1)
+    return_code=1
   else
     log_info "# Successfully merged $1 to $2"
     log_info ""
 
     MERGED_BRANCHES+=($1)
+    return_code=0
   fi
 }
 
@@ -420,7 +430,7 @@ function parse_cli_arguments {
   BRANCH=""
   BUILD_TYPE=""
   ENVIRONMENT=""
-  FLAG=""
+  FROM=""
   INPUT_FILE=""
   VERSION=""
 
@@ -438,11 +448,14 @@ function parse_cli_arguments {
       -e|--environment)
         ENVIRONMENT="$1"
         ;;
-      -f|--flag)
-        FLAG="$1"
+      -f|--from)
+        FROM="$1"
         ;;
       -i|--input-file)
         INPUT_FILE="$1"
+        ;;
+      -o|--output-file)
+        LOG_FILE="$1"
         ;;
       -t|--type)
         BUILD_TYPE="$1"
@@ -459,19 +472,38 @@ function parse_cli_arguments {
 }
 
 function perform_add_to {
+  initialize_branch_lists
   log_info "# Adding branch(es) to $BUILD_BRANCH via $APP_NAME $APP_VERSION..."
-
   execute_or_die "git checkout $BUILD_BRANCH"
+
+  local branch
   for branch in $INPUT_BRANCHES; do
+    execute_or_die "git checkout $branch"
     merge_or_abort $branch $BUILD_BRANCH
   done
 }
 
 function perform_deploy {
   log_info "# Deploying $BUILD_BRANCH on $ENVIRONMENT via $APP_NAME $APP_VERSION..."
+
+  if [ "$ENVIRONMENT" = "test" ]; then
+    log_info "# Successfully deployed $BUILD_BRANCH on $APP_NAME test environment."
+  else
+    case "$BUILD_TYPE" in
+      production)
+        ENVIRONMENT="production"
+        ;;
+      release)
+        ENVIRONMENT="staging"
+        ;;
+    esac
+
+    log_info "# Successfully deployed $BUILD_BRANCH on $ENVIRONMENT."
+  fi
 }
 
 function perform_finish {
+  initialize_branch_lists
   case "$BUILD_TYPE" in
     bugfix)
       log_info "# Merging bugfix(es) into $BUILD_BRANCH via $APP_NAME $APP_VERSION..."
@@ -489,6 +521,44 @@ function perform_finish {
       log_info "# Merging $BUILD_BRANCH into master and develop via $APP_NAME $APP_VERSION..."
       ;;
   esac
+
+  case "$BUILD_TYPE" in
+    bugfix|feature|patch)
+      local branch
+      for branch in $INPUT_BRANCHES; do
+        rebase_and_merge_or_abort $branch $BUILD_BRANCH
+      done
+
+      execute_or_die "git push origin $BUILD_BRANCH"
+      ;;
+    hotfix|release)
+      execute_or_die "git checkout $BUILD_BRANCH"
+
+      execute_or_die "git checkout master"
+      merge_or_abort $BUILD_BRANCH "master"
+
+      if [ ${#MERGED_BRANCHES[@]} -eq 1 ]; then
+        execute_or_die "git push origin master"
+
+        execute_or_die "git checkout develop"
+        merge_or_abort $BUILD_BRANCH "develop"
+      fi
+
+      if [ ${#MERGED_BRANCHES[@]} -eq 2 ]; then
+        execute_or_die "git push origin develop"
+
+        ACTION="deploy"
+        BUILD_TYPE="production"
+
+        if [ "$ENVIRONMENT" != "test" ]; then
+          ENVIRONMENT="production"
+        fi
+
+        perform_deploy
+      fi
+
+      ;;
+  esac
 }
 
 function perform_start {
@@ -502,7 +572,7 @@ function perform_start {
       ACTION="finish"
       BUILD_TYPE="bugfix"
 
-      # perform_finish
+      perform_finish
       ;;
     integration)
       if eval "echo '$BUILD_BRANCH' | grep -E -q -w '.+\.0'"; then
@@ -515,7 +585,7 @@ function perform_start {
       ACTION="add-to"
       BUILD_TYPE="integration"
 
-      # perform_add_to
+      perform_add_to
       ;;
     release)
       execute_or_die "git checkout develop"
@@ -524,7 +594,7 @@ function perform_start {
       ACTION="finish"
       BUILD_TYPE="feature"
 
-      # perform_finish
+      perform_finish
       ;;
   esac
 }
@@ -533,28 +603,28 @@ function perform_update {
   log_info "# Updating $BUILD_BRANCH via $APP_NAME $APP_VERSION..."
 }
 
-# function rebase_and_merge_or_abort {
-#   log_info "# Rebasing $1 to $2"
-#   execute_or_die "git checkout $1"
-#   execute "git rebase $2"
+function rebase_and_merge_or_abort {
+  log_info "# Rebasing $1 to $2"
+  execute_or_die "git checkout $2"
+  execute "git rebase $2 $1"
 
-#   if [ $return_code -ne 0 ]; then
-#     log_warn "# Rebase conflict detected for $1"
-#     execute_or_die "git rebase --abort"
-#     log_info ""
+  if [ $return_code -ne 0 ]; then
+    log_warn "# Rebase conflict detected for $1"
+    execute_or_die "git rebase --abort"
+    log_info ""
 
-#     UNREBASED_BRANCHES+=($1)
-#   else
-#     log_info "# Successfully rebased $1 to $2"
-#     log_info ""
+    UNREBASED_BRANCHES+=($1)
+  else
+    log_info "# Successfully rebased $1 to $2"
+    log_info ""
 
-#     merge_or_abort $1 $2
+    merge_or_abort $1 $2
 
-#     if [ "$merge_success" = true ]; then
-#       execute_or_die "git push --force-with-lease origin $1"
-#     fi
-#   fi
-# }
+    if [ $return_code -eq 0 ]; then
+      execute_or_die "git push --force-with-lease origin $1"
+    fi
+  fi
+}
 
 # function send_larga_deploy_message {
 #   local channel="\"channel\":\"$1\""
@@ -662,11 +732,9 @@ function validate_cli_arguments {
           die_on_missing_branch_or_version
           ;;
         production)
-          ENVIRONMENT="production"
           BRANCH="master"
           ;;
         release)
-          ENVIRONMENT="staging"
           die_on_missing_branch_or_version
           die_on_invalid_branch_or_version
           ;;
@@ -684,8 +752,13 @@ function validate_cli_arguments {
       ;;
     start)
       die_on_invalid_build_type "hotfix|integration|release"
-      die_on_missing_branch_or_version
-      die_on_invalid_branch_or_version
+
+      if [ "$BUILD_TYPE" = "integration" ]; then
+        die_on_invalid_parent_branch "develop|master"
+      else
+        die_on_missing_branch_or_version
+        die_on_invalid_branch_or_version
+      fi
       ;;
     update)
       die_on_invalid_build_type "release"

@@ -8,6 +8,22 @@ function eval_and_grep {
   fi
 }
 
+function expect_commit_in_history {
+  if git log | grep -q $1; then
+    printf "."
+  else
+    printf "\x1B[31m!\x1B[39m"
+  fi
+}
+
+function expect_commit_not_in_history {
+  if git log | grep -q $1; then
+    printf "\x1B[31m!\x1B[39m"
+  else
+    printf "."
+  fi
+}
+
 function global_setup {
   TIMESTAMP=`date +%y%m%d%H%M%S`
   VERSION=`date +%y.%m.%d`
@@ -31,40 +47,14 @@ function global_setup {
 
   echo "master" >> branches.txt
   (git add branches.txt &&git commit -m "Initial commit for master branch" && git push origin master) > /dev/null 2>&1
+  MASTER_COMMIT=`git show HEAD | grep -m 1 commit | awk '{ print $2 }'`
 
   (git checkout -b develop) > /dev/null 2>&1
   echo "develop" >> branches.txt
   (git commit -a -m "Initial commit for develop branch" && git push origin develop) > /dev/null 2>&1
+  DEVELOP_COMMIT=`git show HEAD | grep -m 1 commit | awk '{ print $2 }'`
 
   echo ""
-}
-
-function local_setup_foo {
-
-
-
-
-
-
-  echo "Setting up branches..."
-
-  BRANCH_BUGFIX="git-build/$TIMESTAMP-bugfix"
-  BRANCH_INTEGRATION="git-build/$TIMESTAMP-integration"
-
-  silent_eval "git checkout develop"
-  silent_eval "git fetch origin"
-
-  silent_eval "git branch -D master"
-  silent_eval "git checkout master"
-
-  silent_eval "git checkout -b $BRANCH_INTEGRATION"
-  silent_eval "git push origin $BRANCH_INTEGRATION"
-
-  silent_eval "git checkout -b $BRANCH_BUGFIX"
-  touch "$TIMESTAMP-bugfix.txt"
-  silent_eval "git add $TIMESTAMP-bugfix.txt"
-  silent_eval "git commit -m 'Added $TIMESTAMP-bugfix.txt'"
-  silent_eval "git push origin $BRANCH_BUGFIX"
 }
 
 function global_teardown {
@@ -80,30 +70,187 @@ function global_teardown {
   echo "OK!"
 }
 
-function local_setup_bugfix {
-  BRANCH_BUGFIX="bugfix/$VERSION"
-  (git checkout master && git checkout -b $BRANCH_BUGFIX) > /dev/null 2>&1
-  echo "$BRANCH_BUGFIX" >> branches.txt
-  (git commit -a -m "Initial commit for bugfix branch" && git push origin $BRANCH_BUGFIX) > /dev/null 2>&1
+function local_setup_branch {
+  BRANCH_TEST="$1/$VERSION"
+  (git checkout $2 && git checkout -b $BRANCH_TEST) > /dev/null 2>&1
+  echo "$BRANCH_TEST" >> branches.txt
+  (git commit -a -m "Initial commit for $1 branch" && git push origin $BRANCH_TEST) > /dev/null 2>&1
 }
 
-function local_setup_integration_from_master {
+function local_setup_hotfix {
+  BRANCH_HOTFIX="hotfix/$VERSION"
+  (git checkout master && git checkout -b $BRANCH_HOTFIX && git push origin $BRANCH_HOTFIX) > /dev/null 2>&1
+}
+
+function local_setup_integration_from {
   BRANCH_INTEGRATION="integration/$VERSION"
-  (git checkout master && git checkout -b $BRANCH_INTEGRATION && git push origin $BRANCH_INTEGRATION) > /dev/null 2>&1
+  (git checkout $1 && git checkout -b $BRANCH_INTEGRATION && git push origin $BRANCH_INTEGRATION) > /dev/null 2>&1
 }
 
-function local_teardown_bugfix {
-  (git checkout master && git branch -D $BRANCH_BUGFIX) > /dev/null 2>&1
-  BRANCH_BUGFIX=""
+function local_setup_release {
+  BRANCH_RELEASE="release/$VERSION"
+  (git checkout develop && git checkout -b $BRANCH_RELEASE && git push origin $BRANCH_RELEASE) > /dev/null 2>&1
+}
+
+function local_teardown_branch {
+  (git checkout master && git branch -D $1 && git push origin :$1) > /dev/null 2>&1
+
+  if [ "$1" = "$BRANCH_TEST" ]; then
+    BRANCH_TEST=""
+  fi
+}
+
+function local_teardown_hotfix {
+  local_teardown_branch $BRANCH_HOTFIX
+  BRANCH_HOTFIX=""
 }
 
 function local_teardown_integration {
-  (git checkout master && git branch -D $BRANCH_INTEGRATION) > /dev/null 2>&1
+  local_teardown_branch $BRANCH_INTEGRATION
   BRANCH_INTEGRATION=""
 }
 
-function silent_eval {
-  eval "$ARGS_EVAL > /dev/null 2>&1"
+function local_teardown_release {
+  local_teardown_branch $BRANCH_RELEASE
+  BRANCH_RELEASE=""
+}
+
+function test_add_to {
+  printf "Testing add-to"
+
+  local_setup_integration_from "master"
+  local_setup_branch "bugfix" "master"
+
+  echo "$BRANCH_TEST" > input.txt
+  ARGS_EVAL="git-build -a add-to -t integration -b $BRANCH_INTEGRATION -i input.txt -o output.txt"
+  ARGS_GREP="\[INFO \] git-build> # Successfully merged $BRANCH_TEST to $BRANCH_INTEGRATION"
+  eval_and_grep
+
+  expect_commit_in_history $MASTER_COMMIT
+  expect_commit_not_in_history $DEVELOP_COMMIT
+
+  local_teardown_branch $BRANCH_TEST
+  local_teardown_integration
+
+  local_setup_integration_from "develop"
+  local_setup_branch "feature" "develop"
+
+  echo "$BRANCH_TEST" > input.txt
+  ARGS_EVAL="git-build -a add-to -t integration -b $BRANCH_INTEGRATION -i input.txt"
+  ARGS_GREP="\[INFO \] git-build> # Successfully merged $BRANCH_TEST to $BRANCH_INTEGRATION"
+  eval_and_grep
+
+  expect_commit_in_history $MASTER_COMMIT
+  expect_commit_in_history $DEVELOP_COMMIT
+
+  local_teardown_branch $BRANCH_TEST
+  local_teardown_integration
+
+  echo "OK"
+}
+
+function test_finish {
+  printf "Testing finish"
+
+  # finish bugfix
+  local_setup_hotfix
+  local_setup_branch "bugfix" "master"
+
+  echo "$BRANCH_TEST" > input.txt
+  ARGS_EVAL="git-build -a finish -t bugfix -b $BRANCH_HOTFIX -i input.txt"
+  ARGS_GREP="\[INFO \] git-build> # Successfully merged $BRANCH_TEST to $BRANCH_HOTFIX"
+  eval_and_grep
+
+  expect_commit_in_history $MASTER_COMMIT
+  expect_commit_not_in_history $DEVELOP_COMMIT
+
+  local_teardown_branch $BRANCH_TEST
+  local_teardown_hotfix
+
+  # finish feature
+  local_setup_branch "feature" "develop"
+
+  echo "$BRANCH_TEST" > input.txt
+  ARGS_EVAL="git-build -a finish -t feature -i input.txt"
+  ARGS_GREP="\[INFO \] git-build> # Successfully merged $BRANCH_TEST to develop"
+  eval_and_grep
+
+  expect_commit_in_history $MASTER_COMMIT
+  expect_commit_in_history $DEVELOP_COMMIT
+
+  local_teardown_branch $BRANCH_TEST
+
+  # finish hotfix
+  local_setup_hotfix
+
+  git-build -a finish -t hotfix -b $BRANCH_HOTFIX -e test -o output.txt > /dev/null
+  if grep -q "\[INFO \] git-build> # Successfully merged $BRANCH_HOTFIX to master" output.txt; then
+    (git checkout master && git reset --hard $MASTER_COMMIT && git push --force origin master) > /dev/null 2>&1
+    printf "."
+  else
+    printf "\x1B[31m!\x1B[39m"
+  fi
+
+  if grep -q "\[INFO \] git-build> # Successfully merged $BRANCH_HOTFIX to develop" output.txt; then
+    (git checkout develop && git reset --hard $DEVELOP_COMMIT && git push --force origin develop) > /dev/null 2>&1
+    printf "."
+  else
+    printf "\x1B[31m!\x1B[39m"
+  fi
+
+  local_teardown_hotfix
+
+  # finish patch for hotfix
+  local_setup_hotfix
+  local_setup_branch "patch" $BRANCH_HOTFIX
+
+  echo "$BRANCH_TEST" > input.txt
+  ARGS_EVAL="git-build -a finish -t patch -b $BRANCH_HOTFIX -i input.txt"
+  ARGS_GREP="\[INFO \] git-build> # Successfully merged $BRANCH_TEST to $BRANCH_HOTFIX"
+  eval_and_grep
+
+  expect_commit_in_history $MASTER_COMMIT
+  expect_commit_not_in_history $DEVELOP_COMMIT
+
+  local_teardown_branch $BRANCH_TEST
+  local_teardown_hotfix
+
+  # finish patch for release
+  local_setup_release
+  local_setup_branch "patch" $BRANCH_RELEASE
+
+  echo "$BRANCH_TEST" > input.txt
+  ARGS_EVAL="git-build -a finish -t patch -b $BRANCH_RELEASE -i input.txt"
+  ARGS_GREP="\[INFO \] git-build> # Successfully merged $BRANCH_TEST to $BRANCH_RELEASE"
+  eval_and_grep
+
+  expect_commit_in_history $MASTER_COMMIT
+  expect_commit_in_history $DEVELOP_COMMIT
+
+  local_teardown_branch $BRANCH_TEST
+  local_teardown_release
+
+  # finish release
+  local_setup_release
+
+  git-build -a finish -t hotfix -b $BRANCH_RELEASE -e test -o output.txt > /dev/null
+  if grep -q "\[INFO \] git-build> # Successfully merged $BRANCH_RELEASE to master" output.txt; then
+    (git checkout master && git reset --hard $MASTER_COMMIT && git push --force origin master) > /dev/null 2>&1
+    printf "."
+  else
+    printf "\x1B[31m!\x1B[39m"
+  fi
+
+  if grep -q "\[INFO \] git-build> # Successfully merged $BRANCH_RELEASE to develop" output.txt; then
+    (git checkout develop && git reset --hard $DEVELOP_COMMIT && git push --force origin develop) > /dev/null 2>&1
+    printf "."
+  else
+    printf "\x1B[31m!\x1B[39m"
+  fi
+
+  local_teardown_release
+
+  echo "OK"
 }
 
 function test_offline_validations {
@@ -155,6 +302,18 @@ function test_offline_validations {
   ARGS_GREP="\[ERROR\] git-build> Invalid branch or version 1.1"
   eval_and_grep
 
+  ARGS_EVAL="git-build -a finish -t release -v 1.1"
+  ARGS_GREP="\[ERROR\] git-build> Invalid branch or version 1.1"
+  eval_and_grep
+
+  ARGS_EVAL="git-build -a start -t integration"
+  ARGS_GREP="\[ERROR\] git-build> Parent branch not found"
+  eval_and_grep
+
+  ARGS_EVAL="git-build -a start -t integration -f invalid"
+  ARGS_GREP="\[ERROR\] git-build> Cannot branch from parent branch invalid"
+  eval_and_grep
+
   echo "OK"
 }
 
@@ -173,24 +332,83 @@ function test_online_validations {
   echo "OK"
 }
 
-function test_add_to {
-  local_setup_integration_from_master
-  local_setup_bugfix
-  printf "Testing add-to"
+function test_start {
+  printf "Testing start"
 
-  echo "$BRANCH_BUGFIX" > input.txt
-  ARGS_EVAL="git-build -a add-to -t integration -b $BRANCH_INTEGRATION -i input.txt"
-  ARGS_GREP="\[INFO \] git-build> # Successfully merged $BRANCH_BUGFIX to $BRANCH_INTEGRATION"
+  # start hotfix
+  local_setup_branch "bugfix" "master"
+  BRANCH_HOTFIX="hotfix/3.2.1"
+
+  echo "$BRANCH_TEST" > input.txt
+  ARGS_EVAL="git-build -a start -t hotfix -b $BRANCH_HOTFIX -i input.txt"
+  ARGS_GREP="\[INFO \] git-build> # Successfully merged $BRANCH_TEST to $BRANCH_HOTFIX"
   eval_and_grep
 
-  echo "OK"
-  local_teardown_bugfix
+  expect_commit_in_history $MASTER_COMMIT
+  expect_commit_not_in_history $DEVELOP_COMMIT
+
+  local_teardown_hotfix
+  local_teardown_branch $BRANCH_TEST
+
+  # start integration from master
+  local_setup_branch "bugfix" "master"
+  BRANCH_INTEGRATION="integration/3.2.1"
+
+  echo "$BRANCH_TEST" > input.txt
+  ARGS_EVAL="git-build -a start -t integration -b $BRANCH_INTEGRATION -f master -i input.txt"
+  ARGS_GREP="\[INFO \] git-build> # Successfully merged $BRANCH_TEST to $BRANCH_INTEGRATION"
+  eval_and_grep
+
+  expect_commit_in_history $MASTER_COMMIT
+  expect_commit_not_in_history $DEVELOP_COMMIT
+
+  local_teardown_branch $BRANCH_TEST
   local_teardown_integration
+
+  # start integration from develop
+  local_setup_branch "feature" "develop"
+  BRANCH_INTEGRATION="integration/3.2.1"
+
+  echo "$BRANCH_TEST" > input.txt
+  ARGS_EVAL="git-build -a start -t integration -b $BRANCH_INTEGRATION -f develop -i input.txt"
+  ARGS_GREP="\[INFO \] git-build> # Successfully merged $BRANCH_TEST to $BRANCH_INTEGRATION"
+  eval_and_grep
+
+  expect_commit_in_history $MASTER_COMMIT
+  expect_commit_in_history $DEVELOP_COMMIT
+
+  local_teardown_branch $BRANCH_TEST
+  local_teardown_integration
+
+  # start release
+  local_setup_branch "feature" "develop"
+  BRANCH_RELEASE="release/3.2.0"
+
+  echo "$BRANCH_TEST" > input.txt
+  ARGS_EVAL="git-build -a start -t release -b $BRANCH_RELEASE -i input.txt"
+  ARGS_GREP="\[INFO \] git-build> # Successfully merged $BRANCH_TEST to $BRANCH_RELEASE"
+  eval_and_grep
+
+
+  expect_commit_in_history $MASTER_COMMIT
+  expect_commit_in_history $DEVELOP_COMMIT
+
+  local_teardown_release
+  local_teardown_branch $BRANCH_TEST
+
+
+
+
+
+  echo "OK"
 }
+
 
 
 global_setup
 test_offline_validations
 test_online_validations
 test_add_to
+test_finish
+test_start
 global_teardown

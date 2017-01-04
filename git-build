@@ -115,7 +115,7 @@ function autogenerate_build_branch {
           BUILD_BRANCH="develop"
           ;;
         patch)
-          if eval "echo '$VERSION' | grep -E -q -w '.+\.0'"; then
+          if eval "echo '$VERSION' | grep -E -q -w '^.+\.0$'"; then
             BUILD_BRANCH="release/$VERSION"
           else
             BUILD_BRANCH="hotfix/$VERSION"
@@ -196,9 +196,9 @@ function die_on_invalid_branch_or_version {
     branch_or_version="$VERSION"
   fi
 
-  if [ "$BUILD_TYPE" = "hotfix" ] && eval "echo '$branch_or_version' | grep -E -q -w '.+\.0'"; then
+  if [ "$BUILD_TYPE" = "hotfix" ] && eval "echo '$branch_or_version' | grep -E -q -w '^.+\.0$'"; then
     die "Invalid branch or version $branch_or_version"
-  elif [ "$BUILD_TYPE" = "release" ] && eval "echo '$branch_or_version' | grep -E -q -v -w '.+\.0'"; then
+  elif [ "$BUILD_TYPE" = "release" ] && eval "echo '$branch_or_version' | grep -E -q -v -w '^.+\.0$'"; then
     die "Invalid branch or version $branch_or_version"
   fi
 }
@@ -277,10 +277,15 @@ function die_on_missing_input_branches {
     die "Input branch(es) not found"
   fi
 
+  if ! eval "git fetch origin"; then
+    die "Unable to fetch from origin"
+  fi
+
   local branch
   for branch in $INPUT_BRANCHES; do
     die_on_missing_branch $branch
     git branch -D $branch > /dev/null 2>&1
+    git checkout $branch > /dev/null 2>&1
   done
 }
 
@@ -338,51 +343,6 @@ function initialize_files {
   fi
 }
 
-# function initialize_local_branches {
-#   log_info "# Cleaning / setting up local branches"
-
-#   if [ $ACTION = "append" ]; then
-#     execute_or_die "git checkout develop"
-
-#     execute "git branch -D $BUILD_BRANCH"
-#     execute_or_die "git checkout $BUILD_BRANCH"
-#   elif [ $ACTION = "create" ]; then
-#     if [ "$BUILD_TYPE" = "hotfix" ]; then
-#       execute_or_die "git checkout develop"
-
-#       execute "git branch -D master"
-#       execute_or_die "git checkout master"
-
-#       execute_or_die "git checkout -b $BUILD_BRANCH"
-#     else
-#       execute_or_die "git checkout master"
-
-#       execute "git branch -D develop"
-#       execute_or_die "git checkout develop"
-
-#       execute_or_die "git checkout -b $BUILD_BRANCH"
-#     fi
-#   elif [ $ACTION = "deploy" ]; then
-#     execute_or_die "git checkout master"
-
-#     execute "git branch -D develop"
-#     execute_or_die "git checkout develop"
-
-#     execute "git branch -D $BUILD_BRANCH"
-#     execute_or_die "git checkout $BUILD_BRANCH"
-
-#     execute "git branch -D master"
-#     execute_or_die "git checkout master"
-#   fi
-
-#   if [ ${#INPUT_BRANCHES[@]} -ne 0 ]; then
-#     for branch in $INPUT_BRANCHES; do
-#       execute "git branch -D $branch"
-#       execute_or_die "git checkout $branch"
-#     done
-#   fi
-# }
-
 function log_cleanup {
   echo $@ >> $CLEANUP_FILE
 }
@@ -405,6 +365,11 @@ function log_warn {
 
 function merge_or_abort {
   log_info "# Merging $1 to $2"
+
+  if [ -z $3 ] || [ $3 != "skip_checkout" ]; then
+    execute_or_die "git checkout $2"
+  fi
+
   execute "git merge --no-edit --no-ff $1"
 
   if [ $return_code -ne 0 ]; then
@@ -478,9 +443,12 @@ function perform_add_to {
 
   local branch
   for branch in $INPUT_BRANCHES; do
-    execute_or_die "git checkout $branch"
-    merge_or_abort $branch $BUILD_BRANCH
+    merge_or_abort $branch $BUILD_BRANCH "skip_checkout"
   done
+
+  if [ ${#MERGED_BRANCHES[@]} -gt 0 ]; then
+    execute_or_die "git push origin $BUILD_BRANCH"
+  fi
 }
 
 function perform_deploy {
@@ -529,18 +497,17 @@ function perform_finish {
         rebase_and_merge_or_abort $branch $BUILD_BRANCH
       done
 
-      execute_or_die "git push origin $BUILD_BRANCH"
+      if [ ${#MERGED_BRANCHES[@]} -gt 0 ]; then
+        execute_or_die "git push origin $BUILD_BRANCH"
+      fi
+
       ;;
     hotfix|release)
-      execute_or_die "git checkout $BUILD_BRANCH"
-
-      execute_or_die "git checkout master"
       merge_or_abort $BUILD_BRANCH "master"
 
       if [ ${#MERGED_BRANCHES[@]} -eq 1 ]; then
         execute_or_die "git push origin master"
 
-        execute_or_die "git checkout develop"
         merge_or_abort $BUILD_BRANCH "develop"
       fi
 
@@ -554,7 +521,7 @@ function perform_finish {
           ENVIRONMENT="production"
         fi
 
-        perform_deploy
+        # perform_deploy
       fi
 
       ;;
@@ -575,11 +542,7 @@ function perform_start {
       perform_finish
       ;;
     integration)
-      if eval "echo '$BUILD_BRANCH' | grep -E -q -w '.+\.0'"; then
-        execute_or_die "git checkout develop"
-      else
-        execute_or_die "git checkout master"
-      fi
+      execute_or_die "git checkout $FROM"
       execute_or_die "git checkout -b $BUILD_BRANCH"
 
       ACTION="add-to"
@@ -601,28 +564,34 @@ function perform_start {
 
 function perform_update {
   log_info "# Updating $BUILD_BRANCH via $APP_NAME $APP_VERSION..."
+  merge_or_abort "develop" "$BUILD_BRANCH"
+
+  if [ ${#MERGED_BRANCHES[@]} -gt 0 ]; then
+    execute_or_die "git push origin $BUILD_BRANCH"
+
+    ACTION="deploy"
+    BUILD_TYPE="release"
+
+    # perform_deploy
+  fi
 }
 
 function rebase_and_merge_or_abort {
   log_info "# Rebasing $1 to $2"
-  execute_or_die "git checkout $2"
   execute "git rebase $2 $1"
 
-  if [ $return_code -ne 0 ]; then
+  if [ $return_code -eq 0 ]; then
+    log_info "# Successfully rebased $1 to $2"
+    log_info ""
+
+    execute_or_die "git push --force-with-lease origin $1"
+    merge_or_abort $1 $2
+  else
     log_warn "# Rebase conflict detected for $1"
     execute_or_die "git rebase --abort"
     log_info ""
 
     UNREBASED_BRANCHES+=($1)
-  else
-    log_info "# Successfully rebased $1 to $2"
-    log_info ""
-
-    merge_or_abort $1 $2
-
-    if [ $return_code -eq 0 ]; then
-      execute_or_die "git push --force-with-lease origin $1"
-    fi
   fi
 }
 
@@ -694,10 +663,6 @@ function validate_build_branch {
     autogenerate_build_branch
   fi
 
-  if ! eval "git fetch origin"; then
-    die "Unable to fetch from origin"
-  fi
-
   case "$ACTION" in
     add-to|deploy|finish|update)
       die_on_missing_branch $BUILD_BRANCH
@@ -708,6 +673,7 @@ function validate_build_branch {
   esac
 
   git branch -D $BUILD_BRANCH > /dev/null 2>&1
+  git checkout $BUILD_BRANCH > /dev/null 2>&1
 }
 
 function validate_cli_arguments {
@@ -881,25 +847,6 @@ case "$ACTION" in
 esac
 
 echo "OK"
-
-# initialize_local_branches
-
-# if [ $ACTION = "deploy" ]; then
-#   deploy
-# else
-#   MERGED_BRANCHES=()
-#   UNMERGED_BRANCHES=()
-#   UNREBASED_BRANCHES=()
-
-#   if [ "$BUILD_TYPE" = "stage" ]; then
-#     for branch in $INPUT_BRANCHES; do
-#       merge_or_abort $branch $BUILD_BRANCH
-#     done
-#   else
-#     for branch in $INPUT_BRANCHES; do
-#       rebase_and_merge_or_abort $branch $BUILD_BRANCH
-#     done
-#   fi
 
 #   execute_or_die "git push origin $BUILD_BRANCH"
 

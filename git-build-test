@@ -66,8 +66,6 @@ function global_teardown {
 
   echo "Tearing down test repository..."
   rm -Rf "/tmp/$TEST_REPO_NAME"
-
-  echo "OK!"
 }
 
 function local_setup_branch {
@@ -75,6 +73,7 @@ function local_setup_branch {
   (git checkout $2 && git checkout -b $BRANCH_TEST) > /dev/null 2>&1
   echo "$BRANCH_TEST" >> branches.txt
   (git commit -a -m "Initial commit for $1 branch" && git push origin $BRANCH_TEST) > /dev/null 2>&1
+  BRANCH_COMMIT=`git show HEAD | grep -m 1 commit | awk '{ print $2 }'`
 }
 
 function local_setup_hotfix {
@@ -88,7 +87,7 @@ function local_setup_integration_from {
 }
 
 function local_setup_release {
-  BRANCH_RELEASE="release/$VERSION"
+  BRANCH_RELEASE="release/$VERSION.0"
   (git checkout develop && git checkout -b $BRANCH_RELEASE && git push origin $BRANCH_RELEASE) > /dev/null 2>&1
 }
 
@@ -97,6 +96,7 @@ function local_teardown_branch {
 
   if [ "$1" = "$BRANCH_TEST" ]; then
     BRANCH_TEST=""
+    BRANCH_COMMIT=""
   fi
 }
 
@@ -118,6 +118,7 @@ function local_teardown_release {
 function test_add_to {
   printf "Testing add-to"
 
+  # add-to integration from master
   local_setup_integration_from "master"
   local_setup_branch "bugfix" "master"
 
@@ -128,10 +129,12 @@ function test_add_to {
 
   expect_commit_in_history $MASTER_COMMIT
   expect_commit_not_in_history $DEVELOP_COMMIT
+  expect_commit_in_history $BRANCH_COMMIT
 
   local_teardown_branch $BRANCH_TEST
   local_teardown_integration
 
+  # add-to integration from develop
   local_setup_integration_from "develop"
   local_setup_branch "feature" "develop"
 
@@ -142,11 +145,12 @@ function test_add_to {
 
   expect_commit_in_history $MASTER_COMMIT
   expect_commit_in_history $DEVELOP_COMMIT
+  expect_commit_in_history $BRANCH_COMMIT
 
   local_teardown_branch $BRANCH_TEST
   local_teardown_integration
 
-  echo "OK"
+  echo "OK!"
 }
 
 function test_finish {
@@ -163,6 +167,7 @@ function test_finish {
 
   expect_commit_in_history $MASTER_COMMIT
   expect_commit_not_in_history $DEVELOP_COMMIT
+  expect_commit_in_history $BRANCH_COMMIT
 
   local_teardown_branch $BRANCH_TEST
   local_teardown_hotfix
@@ -177,6 +182,7 @@ function test_finish {
 
   expect_commit_in_history $MASTER_COMMIT
   expect_commit_in_history $DEVELOP_COMMIT
+  expect_commit_in_history $BRANCH_COMMIT
 
   local_teardown_branch $BRANCH_TEST
 
@@ -211,6 +217,7 @@ function test_finish {
 
   expect_commit_in_history $MASTER_COMMIT
   expect_commit_not_in_history $DEVELOP_COMMIT
+  expect_commit_in_history $BRANCH_COMMIT
 
   local_teardown_branch $BRANCH_TEST
   local_teardown_hotfix
@@ -226,6 +233,7 @@ function test_finish {
 
   expect_commit_in_history $MASTER_COMMIT
   expect_commit_in_history $DEVELOP_COMMIT
+  expect_commit_in_history $BRANCH_COMMIT
 
   local_teardown_branch $BRANCH_TEST
   local_teardown_release
@@ -233,7 +241,7 @@ function test_finish {
   # finish release
   local_setup_release
 
-  git-build -a finish -t hotfix -b $BRANCH_RELEASE -e test -o output.txt > /dev/null
+  git-build -a finish -t release -b $BRANCH_RELEASE -e test -o output.txt > /dev/null 2>&1
   if grep -q "\[INFO \] git-build> # Successfully merged $BRANCH_RELEASE to master" output.txt; then
     (git checkout master && git reset --hard $MASTER_COMMIT && git push --force origin master) > /dev/null 2>&1
     printf "."
@@ -250,7 +258,7 @@ function test_finish {
 
   local_teardown_release
 
-  echo "OK"
+  echo "OK!"
 }
 
 function test_offline_validations {
@@ -314,7 +322,7 @@ function test_offline_validations {
   ARGS_GREP="\[ERROR\] git-build> Cannot branch from parent branch invalid"
   eval_and_grep
 
-  echo "OK"
+  echo "OK!"
 }
 
 function test_online_validations {
@@ -329,7 +337,7 @@ function test_online_validations {
   ARGS_GREP="\[ERROR\] git-build> Branch master already exists"
   eval_and_grep
 
-  echo "OK"
+  echo "OK!"
 }
 
 function test_start {
@@ -389,21 +397,36 @@ function test_start {
   ARGS_GREP="\[INFO \] git-build> # Successfully merged $BRANCH_TEST to $BRANCH_RELEASE"
   eval_and_grep
 
-
   expect_commit_in_history $MASTER_COMMIT
   expect_commit_in_history $DEVELOP_COMMIT
 
   local_teardown_release
   local_teardown_branch $BRANCH_TEST
 
-
-
-
-
-  echo "OK"
+  echo "OK!"
 }
 
+function test_update {
+  printf "Testing update"
 
+  local_setup_release
+  local_setup_branch "feature" "develop"
+
+  (git checkout develop && git merge --no-edit --no-ff $BRANCH_TEST) > /dev/null 2>&1
+
+  ARGS_EVAL="git-build -a update -t release -b $BRANCH_RELEASE"
+  ARGS_GREP="\[INFO \] git-build> # Successfully merged develop to $BRANCH_RELEASE"
+  eval_and_grep
+
+  expect_commit_in_history $MASTER_COMMIT
+  expect_commit_in_history $DEVELOP_COMMIT
+  expect_commit_in_history $BRANCH_COMMIT
+
+  local_teardown_branch $BRANCH_TEST
+  local_teardown_release
+
+  echo "OK!"
+}
 
 global_setup
 test_offline_validations
@@ -411,4 +434,7 @@ test_online_validations
 test_add_to
 test_finish
 test_start
+test_update
 global_teardown
+
+echo "OK!"

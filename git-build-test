@@ -127,6 +127,7 @@ function test_add_to {
   ARGS_GREP="\[INFO \] git-build> # Successfully merged $BRANCH_TEST to $BRANCH_INTEGRATION"
   eval_and_grep
 
+  git checkout $BRANCH_TEST > /dev/null 2>&1
   expect_commit_in_history $MASTER_COMMIT
   expect_commit_not_in_history $DEVELOP_COMMIT
   expect_commit_in_history $BRANCH_COMMIT
@@ -143,6 +144,7 @@ function test_add_to {
   ARGS_GREP="\[INFO \] git-build> # Successfully merged $BRANCH_TEST to $BRANCH_INTEGRATION"
   eval_and_grep
 
+  git checkout $BRANCH_TEST > /dev/null 2>&1
   expect_commit_in_history $MASTER_COMMIT
   expect_commit_in_history $DEVELOP_COMMIT
   expect_commit_in_history $BRANCH_COMMIT
@@ -165,6 +167,7 @@ function test_finish {
   ARGS_GREP="\[INFO \] git-build> # Successfully merged $BRANCH_TEST to $BRANCH_HOTFIX"
   eval_and_grep
 
+  git checkout $BRANCH_HOTFIX > /dev/null 2>&1
   expect_commit_in_history $MASTER_COMMIT
   expect_commit_not_in_history $DEVELOP_COMMIT
   expect_commit_in_history $BRANCH_COMMIT
@@ -180,6 +183,7 @@ function test_finish {
   ARGS_GREP="\[INFO \] git-build> # Successfully merged $BRANCH_TEST to develop"
   eval_and_grep
 
+  git checkout develop > /dev/null 2>&1
   expect_commit_in_history $MASTER_COMMIT
   expect_commit_in_history $DEVELOP_COMMIT
   expect_commit_in_history $BRANCH_COMMIT
@@ -189,7 +193,7 @@ function test_finish {
   # finish hotfix
   local_setup_hotfix
 
-  git-build -a finish -t hotfix -b $BRANCH_HOTFIX -e test -o output.txt > /dev/null
+  git-build -a finish -t hotfix -b $BRANCH_HOTFIX -o output.txt > /dev/null
   if grep -q "\[INFO \] git-build> # Successfully merged $BRANCH_HOTFIX to master" output.txt; then
     (git checkout master && git reset --hard $MASTER_COMMIT && git push --force origin master) > /dev/null 2>&1
     printf "."
@@ -215,6 +219,7 @@ function test_finish {
   ARGS_GREP="\[INFO \] git-build> # Successfully merged $BRANCH_TEST to $BRANCH_HOTFIX"
   eval_and_grep
 
+  git checkout $BRANCH_HOTFIX > /dev/null 2>&1
   expect_commit_in_history $MASTER_COMMIT
   expect_commit_not_in_history $DEVELOP_COMMIT
   expect_commit_in_history $BRANCH_COMMIT
@@ -231,6 +236,7 @@ function test_finish {
   ARGS_GREP="\[INFO \] git-build> # Successfully merged $BRANCH_TEST to $BRANCH_RELEASE"
   eval_and_grep
 
+  git checkout $BRANCH_RELEASE > /dev/null 2>&1
   expect_commit_in_history $MASTER_COMMIT
   expect_commit_in_history $DEVELOP_COMMIT
   expect_commit_in_history $BRANCH_COMMIT
@@ -241,7 +247,7 @@ function test_finish {
   # finish release
   local_setup_release
 
-  git-build -a finish -t release -b $BRANCH_RELEASE -e test -o output.txt > /dev/null 2>&1
+  git-build -a finish -t release -b $BRANCH_RELEASE -o output.txt > /dev/null 2>&1
   if grep -q "\[INFO \] git-build> # Successfully merged $BRANCH_RELEASE to master" output.txt; then
     (git checkout master && git reset --hard $MASTER_COMMIT && git push --force origin master) > /dev/null 2>&1
     printf "."
@@ -294,14 +300,6 @@ function test_offline_validations {
   ARGS_GREP="\[ERROR\] git-build> Branch placeholder does not exist"
   eval_and_grep
 
-  ARGS_EVAL="git-build -a deploy -t hotfix"
-  ARGS_GREP="\[ERROR\] git-build> Environment not found"
-  eval_and_grep
-
-  ARGS_EVAL="git-build -a deploy -t hotfix -e invalid"
-  ARGS_GREP="\[ERROR\] git-build> Invalid environment invalid"
-  eval_and_grep
-
   ARGS_EVAL="git-build -a finish -t hotfix -v 1.0"
   ARGS_GREP="\[ERROR\] git-build> Invalid branch or version 1.0"
   eval_and_grep
@@ -352,6 +350,7 @@ function test_start {
   ARGS_GREP="\[INFO \] git-build> # Successfully merged $BRANCH_TEST to $BRANCH_HOTFIX"
   eval_and_grep
 
+  git checkout $BRANCH_HOTFIX > /dev/null 2>&1
   expect_commit_in_history $MASTER_COMMIT
   expect_commit_not_in_history $DEVELOP_COMMIT
 
@@ -367,6 +366,7 @@ function test_start {
   ARGS_GREP="\[INFO \] git-build> # Successfully merged $BRANCH_TEST to $BRANCH_INTEGRATION"
   eval_and_grep
 
+  git checkout $BRANCH_INTEGRATION > /dev/null 2>&1
   expect_commit_in_history $MASTER_COMMIT
   expect_commit_not_in_history $DEVELOP_COMMIT
 
@@ -382,6 +382,7 @@ function test_start {
   ARGS_GREP="\[INFO \] git-build> # Successfully merged $BRANCH_TEST to $BRANCH_INTEGRATION"
   eval_and_grep
 
+  git checkout $BRANCH_INTEGRATION > /dev/null 2>&1
   expect_commit_in_history $MASTER_COMMIT
   expect_commit_in_history $DEVELOP_COMMIT
 
@@ -397,6 +398,7 @@ function test_start {
   ARGS_GREP="\[INFO \] git-build> # Successfully merged $BRANCH_TEST to $BRANCH_RELEASE"
   eval_and_grep
 
+  git checkout $BRANCH_RELEASE > /dev/null 2>&1
   expect_commit_in_history $MASTER_COMMIT
   expect_commit_in_history $DEVELOP_COMMIT
 
@@ -418,6 +420,7 @@ function test_update {
   ARGS_GREP="\[INFO \] git-build> # Successfully merged develop to $BRANCH_RELEASE"
   eval_and_grep
 
+  git checkout $BRANCH_RELEASE > /dev/null 2>&1
   expect_commit_in_history $MASTER_COMMIT
   expect_commit_in_history $DEVELOP_COMMIT
   expect_commit_in_history $BRANCH_COMMIT

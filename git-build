@@ -69,16 +69,70 @@ function autogenerate_build_branch {
   esac
 }
 
+function checkout_branch {
+  log_info "Checking out $1"
+  (git branch -D $1; git checkout $1) > /dev/null 2>&1
+}
+
+function checkout_branches {
+  log_info "Checking out required branches..."
+  local branch
+
+  case "$ACTION" in
+    add-to)
+      checkout_branch "$BUILD_BRANCH"
+      for branch in $INPUT_BRANCHES; do
+        checkout_branch $branch
+      done
+      ;;
+    finish)
+      case "$BUILD_TYPE" in
+        bugfix|patch)
+          checkout_branch "$BUILD_BRANCH"
+          for branch in $INPUT_BRANCHES; do
+            checkout_branch $branch
+            execute "git log"
+          done
+          ;;
+        feature)
+          checkout_branch "develop"
+          for branch in $INPUT_BRANCHES; do
+            checkout_branch $branch
+          done
+          ;;
+        hotfix|release)
+          checkout_branch "develop"
+          checkout_branch "master"
+          checkout_branch "$BUILD_BRANCH"
+          ;;
+      esac
+      ;;
+    start)
+      case "$BUILD_TYPE" in
+        hotfix|integration)
+          for branch in $INPUT_BRANCHES; do
+            checkout_branch $branch
+          done
+          ;;
+      esac
+      ;;
+    update)
+      checkout_branch "develop"
+      checkout_branch "master"
+      checkout_branch "$BUILD_BRANCH"
+
+      # TODO: auto-checkout NEXT release branch, IF it exists
+      ;;
+  esac
+
+  log_info ""
+}
+
 function cleanup_branches {
-  log_info "Cleaning up branches..."
+  log_info "Cleaning up merged branches..."
 
-  git checkout develop > /dev/null 2>&1
-  git branch -D master > /dev/null 2>&1
-
-  git checkout master > /dev/null 2>&1
-  git branch -D develop > /dev/null 2>&1
-
-  for branch in $INPUT_BRANCHES; do
+  local branch
+  for branch in ${MERGED_BRANCHES[@]}; do
     git branch -D $branch > /dev/null 2>&1
   done
 
@@ -137,7 +191,7 @@ function die {
   if [ -z "$1" ]; then
     echo "$APP_NAME: (1) Generic error"
   else
-    log_error $@
+    log_error "# $@"
     echo "$APP_NAME: (1) $@"
   fi
 
@@ -175,6 +229,12 @@ function die_on_existing_branch {
   fi
 }
 
+function die_on_failed_fetch {
+  if ! eval "git fetch origin > /dev/null 2>&1"; then
+    die "Unable to fetch from origin"
+  fi
+}
+
 function die_on_invalid_build_type {
   if [ -z $BUILD_TYPE ]; then
     die_with_help "Type not found"
@@ -190,7 +250,9 @@ function die_on_invalid_branch_or_version {
     branch_or_version="$VERSION"
   fi
 
-  if [ "$BUILD_TYPE" = "hotfix" ] && eval "echo '$branch_or_version' | grep -E -q -w '^.+\.0$'"; then
+  if ([ "$BUILD_TYPE" = "bugfix" ] || [ "$BUILD_TYPE" = "hotfix" ]) &&
+    eval "echo '$branch_or_version' | grep -E -q -w '^.+\.0$'"; then
+
     die "Invalid branch or version $branch_or_version"
   elif [ "$BUILD_TYPE" = "release" ] && eval "echo '$branch_or_version' | grep -E -q -v -w '^.+\.0$'"; then
     die "Invalid branch or version $branch_or_version"
@@ -198,7 +260,7 @@ function die_on_invalid_branch_or_version {
 }
 
 function die_on_invalid_larga {
-  if ! eval "type larga > /dev/null"; then
+  if ! eval "type larga > /dev/null 2>&1"; then
     die "Larga not found; download the latest from $INSTALLER_URL_LARGA"
   fi
 }
@@ -218,25 +280,25 @@ function die_on_missing_branch {
 }
 
 function die_on_missing_curl {
-  if ! eval "type curl > /dev/null"; then
+  if ! eval "type curl > /dev/null 2>&1"; then
     die "Curl not found! Download the latest from $INSTALLER_URL_CURL"
   fi
 }
 
 function die_on_missing_engineyard {
-  if ! eval "gem list -i engineyard > /dev/null"; then
+  if ! eval "gem list -i engineyard > /dev/null 2>&1"; then
     die "EngineYard gem not found! Download the latest with 'gem install engineyard'"
   fi
 }
 
 function die_on_missing_gem {
-  if ! eval "type gem > /dev/null"; then
+  if ! eval "type gem > /dev/null 2>&1"; then
     die "RubyGems not found! Download the latest from $INSTALLER_URL_GEM"
   fi
 }
 
 function die_on_missing_git {
-  if ! eval "type git > /dev/null"; then
+  if ! eval "type git > /dev/null 2>&1"; then
     die "Git not found; download the installer from $INSTALLER_URL_GIT"
   fi
 }
@@ -258,17 +320,6 @@ function die_on_missing_input_branches {
   if [ -z "$INPUT_BRANCHES" ]; then
     die "Input branch(es) not found"
   fi
-
-  if ! eval "git fetch origin"; then
-    die "Unable to fetch from origin"
-  fi
-
-  local branch
-  for branch in $INPUT_BRANCHES; do
-    die_on_missing_branch $branch
-    git branch -D $branch > /dev/null 2>&1
-    git checkout $branch > /dev/null 2>&1
-  done
 }
 
 function die_on_missing_branch_or_version {
@@ -279,7 +330,7 @@ function die_on_missing_branch_or_version {
 
 function die_on_missing_vim {
   if [ -z "$INPUT_FILE" ] || [ ! -f "$INPUT_FILE" ]; then
-    if ! eval "type vim > /dev/null"; then
+    if ! eval "type vim > /dev/null 2>&1"; then
       die "Vim not found; download the installer from $INSTALLER_URL_VIM"
     fi
   fi
@@ -423,14 +474,8 @@ function perform_deploy {
       ;;
     hotfix)
       log_info "# Deploying $BUILD_BRANCH on hotfix Larga via $APP_NAME $APP_VERSION..."
-      deploy_to_larga "hotfix-integration" "integration (hotfix)"
+      deploy_to_larga "hotfix" "integration (hotfix)"
       log_info "# Successfully deployed $BUILD_BRANCH on hotfix Larga."
-
-      # TODO: pending EY instance, replace with the following
-
-      # log_info "# Deploying $BUILD_BRANCH on EngineYard hotfix staging via $APP_NAME $APP_VERSION..."
-      # deploy_to_engineyard "$ENVIRONMENT_EY_HOTFIX"
-      # log_info "# Successfully deployed $BUILD_BRANCH on EngineYard hotfix staging."
       ;;
     integration)
       case "$FROM" in
@@ -441,14 +486,8 @@ function perform_deploy {
           ;;
         master)
           log_info "# Deploying $BUILD_BRANCH on hotfix Larga via $APP_NAME $APP_VERSION..."
-          deploy_to_larga "hotfix-integration" "integration (hotfix)"
+          deploy_to_larga "hotfix" "integration (hotfix)"
           log_info "# Successfully deployed $BUILD_BRANCH on hotfix Larga."
-
-          # TODO: pending EY instance, replace with the following
-
-          # log_info "# Deploying $BUILD_BRANCH on EngineYard hotfix staging via $APP_NAME $APP_VERSION..."
-          # deploy_to_engineyard "$ENVIRONMENT_EY_HOTFIX"
-          # log_info "# Successfully deployed $BUILD_BRANCH on EngineYard hotfix staging."
           ;;
       esac
       ;;
@@ -495,7 +534,6 @@ function perform_finish {
 
       show_rebase_conflicts
       show_merge_conflicts
-      cleanup_branches
       ;;
     hotfix|release)
       merge_or_abort $BUILD_BRANCH "master"
@@ -518,10 +556,10 @@ function perform_finish {
       else
         show_merge_conflict $BUILD_BRANCH "develop"
       fi
-
-      cleanup_branches
     ;;
   esac
+
+  cleanup_branches
 }
 
 function perform_start {
@@ -549,17 +587,18 @@ function perform_start {
     release)
       execute_or_die "git checkout develop"
       execute_or_die "git checkout -b $BUILD_BRANCH"
+      execute_or_die "git push origin $BUILD_BRANCH"
 
-      ACTION="finish"
-      BUILD_TYPE="feature"
-
-      perform_finish
+      log_info "# Successfully created $BUILD_BRANCH from develop."
       ;;
   esac
 }
 
 function perform_update {
+  initialize_branch_lists
   log_info "# Updating $BUILD_BRANCH via $APP_NAME $APP_VERSION..."
+
+  execute_or_die "git checkout develop"
   merge_or_abort "develop" "$BUILD_BRANCH"
 
   if [ ${#MERGED_BRANCHES[@]} -gt 0 ]; then
@@ -569,6 +608,8 @@ function perform_update {
     log_info "# To deploy, use the following command:"
     log_info "#   $APP_NAME -a deploy -t $BUILD_TYPE -b $BUILD_BRANCH"
     log_info ""
+
+    cleanup_branches
   else
     show_merge_conflicts "skip_error_message"
 
@@ -577,8 +618,6 @@ function perform_update {
     log_warn "#   git merge --no-edit --no-ff develop"
     log_warn ""
   fi
-
-  cleanup_branches
 }
 
 function rebase_and_merge_or_abort {
@@ -595,6 +634,7 @@ function rebase_and_merge_or_abort {
     log_warn "# Rebase conflict detected for $1"
     execute_or_die "git rebase --abort"
     log_info ""
+    execute "git log"
 
     UNREBASED_BRANCHES+=($1)
   fi
@@ -646,7 +686,7 @@ function show_rebase_conflicts {
     log_warn ""
 
     log_warn "To add these branches, use the following command after fixing the rebase conflict(s):"
-    log_warn "  $APP_NAME -a $ACTION -t $BUILD_TYPE $BUILD_BRANCH"
+    log_warn "  $APP_NAME -a $ACTION -t $BUILD_TYPE -b $BUILD_BRANCH"
     log_warn ""
   fi
 }
@@ -666,9 +706,6 @@ function validate_build_branch {
       die_on_existing_branch $BUILD_BRANCH
       ;;
   esac
-
-  git branch -D $BUILD_BRANCH > /dev/null 2>&1
-  git checkout $BUILD_BRANCH > /dev/null 2>&1
 }
 
 function validate_cli_arguments {
@@ -691,6 +728,7 @@ function validate_cli_arguments {
           die_on_invalid_branch_or_version
           ;;
         integration)
+          die_on_invalid_parent_branch "develop|master"
           die_on_missing_branch_or_version
           ;;
         production)
@@ -771,18 +809,34 @@ function validate_dependencies {
 }
 
 function validate_input_branches {
+  die_on_failed_fetch
+
   case "$ACTION" in
-    add-to|start)
+    add-to)
       die_on_missing_input_branches
+      die_on_failed_fetch
       ;;
     finish)
       case "$BUILD_TYPE" in
         bugfix|feature|patch)
           die_on_missing_input_branches
+          die_on_failed_fetch
+          ;;
+      esac
+      ;;
+    start)
+      case "$BUILD_TYPE" in
+        hotfix|integration|patch)
+          die_on_missing_input_branches
+          die_on_failed_fetch
           ;;
       esac
       ;;
   esac
+
+  for branch in $INPUT_BRANCHES; do
+    die_on_missing_branch $branch
+  done
 }
 
 parse_cli_arguments $@
@@ -791,6 +845,7 @@ validate_dependencies
 validate_input_branches
 validate_build_branch
 
+checkout_branches
 initialize_files # actual logging starts here
 
 case "$ACTION" in

@@ -2,6 +2,18 @@
 All notable changes to this project will be documented in this file.
 This project adheres to [Semantic Versioning](http://semver.org/).
 
+## 2.0.0 - 2017-01-26
+* Major changes
+  * Switch to a workflow much closer to [Gitflow](http://http://nvie.com/posts/a-successful-git-branching-model/)
+  * Support monthly deployment schedule releasing on the second to the last monday of every month
+  * Separate master-based branches (bugfixes and hotfix patches) from develop-based ones (features, releases and release patches)
+  * On hotfix finish, automatically merge to master, develop AND release branch, if one already exists
+* Modify options
+  * Add -b|--branch, -o|--output-file
+  * Remove -e|--environment; inferred from use-case defined by -a|--action and -t|--type
+  * Remove -f|--flag; integration now avoids collisions by minute-based version number
+* Implement unit testing
+
 ## 1.0.1 - 2016-09-06
 * Modify help text
   * Add "deploy" to options for -a|--action

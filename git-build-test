@@ -286,7 +286,7 @@ function test_finish_patch_for_release {
 }
 
 function test_finish_release {
-  printf "  feature"
+  printf "  release"
   local_setup_release
 
   silent_git_build "-a finish -t release -b $BRANCH_RELEASE"
@@ -312,9 +312,6 @@ function test_finish_release {
 function test_invalid_branch_and_version {
   local branch="$1"
   local version="$2"
-
-  silent_git_build "-a $ACTION -t $BUILD_TYPE -i input.txt -f develop"
-  expect_log_in_output "\[ERROR\] git-build> # Branch or version not found"
 
   if [ -n "$branch" ]; then
     silent_git_build "-a $ACTION -t $BUILD_TYPE -b $branch -i input.txt -f develop"
@@ -357,6 +354,11 @@ function test_invalid_parent_branch {
   expect_log_in_output "\[ERROR\] git-build> # Cannot branch from parent branch invalid"
 }
 
+function test_missing_branch_and_version {
+  silent_git_build "-a $ACTION -t $BUILD_TYPE -i input.txt -f develop"
+  expect_log_in_output "\[ERROR\] git-build> # Branch or version not found"
+}
+
 function test_validations {
   printf "Testing validations"
 
@@ -381,6 +383,7 @@ function test_validations_for_add_to {
 
   BUILD_TYPE="integration"
 
+  test_missing_branch_and_version
   test_invalid_branch_and_version
   test_invalid_input_branches
   test_branch_does_not_exist "integration/invalid.0"
@@ -400,11 +403,13 @@ function test_validations_for_deploy {
   # Yeah... let's NOT do this ;)
 
   BUILD_TYPE="hotfix"
+  test_missing_branch_and_version
   test_invalid_branch_and_version "hotfix/1.0" "1.0"
   test_branch_does_not_exist "hotfix/invalid.1"
 
   BUILD_TYPE="integration"
   test_invalid_parent_branch
+  test_missing_branch_and_version
   test_invalid_branch_and_version
   test_branch_does_not_exist "integration/invalid.0"
 
@@ -461,6 +466,7 @@ function test_validations_for_start {
   test_valid_build_types "hotfix integration release"
 
   BUILD_TYPE="hotfix"
+  test_missing_branch_and_version
   test_invalid_branch_and_version "hotfix/1.0" "1.0"
   VERSION="1.1"
   test_invalid_input_branches
@@ -475,23 +481,6 @@ function test_validations_for_start {
   test_invalid_branch_and_version "release/1.1" "1.1"
   VERSION="1.0"
   test_branch_exists "release/1.0"
-
-  echo ""
-}
-
-function test_validations_for_update {
-  ACTION="update"
-  VERSION="1.0"
-
-  printf "  for $ACTION"
-  > input.txt
-
-  test_invalid_build_types "bugfix develop feature hotfix integration invalid patch production"
-  test_valid_build_types "release"
-
-  BUILD_TYPE="release"
-  test_invalid_branch_and_version "release/1.1" "1.1"
-  test_branch_does_not_exist "release/invalid.0"
 
   echo ""
 }
@@ -567,26 +556,6 @@ function test_start_release {
   echo ""
 }
 
-function test_update_release {
-  printf "  release"
-  local_setup_release
-  local_setup_branch "feature" "develop"
-
-  (git checkout develop && git merge --no-edit --no-ff $BRANCH_TEST) > /dev/null 2>&1
-
-  silent_git_build "-a update -t release -b $BRANCH_RELEASE"
-  expect_log_in_output "\[INFO \] git-build> # Successfully merged develop to $BRANCH_RELEASE"
-
-  git checkout $BRANCH_RELEASE > /dev/null 2>&1
-  expect_commit_in_history $MASTER_COMMIT
-  expect_commit_in_history $DEVELOP_COMMIT
-  expect_commit_in_history $BRANCH_COMMIT
-
-  local_teardown_branch $BRANCH_TEST
-  local_teardown_release
-  echo ""
-}
-
 function test_valid_build_types {
   local build_type
 
@@ -603,7 +572,6 @@ test_validations_for_add_to
 test_validations_for_deploy
 test_validations_for_finish
 test_validations_for_start
-test_validations_for_update
 
 echo "Testing add-to"
 test_add_to_integration_from_master
@@ -622,9 +590,6 @@ test_start_hotfix
 test_start_integration_from_master
 test_start_integration_from_develop
 test_start_release
-
-echo "Testing update"
-test_update_release
 
 global_teardown
 

@@ -24,8 +24,16 @@ function autogenerate_build_branch {
       ;;
     deploy)
       case "$BUILD_TYPE" in
+        develop)
+          BUILD_BRANCH="develop"
+          ;;
         production)
           BUILD_BRANCH="master"
+          ;;
+        release)
+          # the UPCOMING release date INCLUDING current date
+          local release_month=`date -v +Mon -v +7d -v +1m -v 1d -v -14d -v +Mon +%y.%-m`
+          BUILD_BRANCH="release/$release_month.0"
           ;;
         *)
           BUILD_BRANCH="$BUILD_TYPE/$VERSION"
@@ -41,11 +49,16 @@ function autogenerate_build_branch {
           BUILD_BRANCH="develop"
           ;;
         patch)
-          if eval "echo '$VERSION' | grep -E -q -w '^.+\.0$'"; then
+          if [[ "$VERSION" == *.0 ]]; then
             BUILD_BRANCH="release/$VERSION"
           else
             BUILD_BRANCH="hotfix/$VERSION"
           fi
+          ;;
+        release)
+          # the MOST RECENT release date INCLUDING current date
+          local release_month=`date -v -Mon -v +14d -v 1d -v -14d -v +Mon +%y.%-m`
+          BUILD_BRANCH="release/$release_month.0"
           ;;
         *)
           BUILD_BRANCH="$BUILD_TYPE/$VERSION"
@@ -55,16 +68,18 @@ function autogenerate_build_branch {
     start)
       case "$BUILD_TYPE" in
         integration)
-          local version=`date +%y.%-m.%-d.%-H.%-M`
-          BUILD_BRANCH="integration/$version"
+          local current_time=`date +%y.%-m.%-d.%-H.%-M`
+          BUILD_BRANCH="integration/$current_time"
+          ;;
+        release)
+          # the UPCOMING release date EXCLUDING current date
+          local release_month=`date -v +1d -v +Mon -v +7d -v +1m -v 1d -v -14d -v +Mon +%y.%-m`
+          BUILD_BRANCH="release/$release_month.0"
           ;;
         *)
           BUILD_BRANCH="$BUILD_TYPE/$VERSION"
           ;;
       esac
-      ;;
-    update)
-      BUILD_BRANCH="$BUILD_TYPE/$VERSION"
       ;;
   esac
 }
@@ -115,13 +130,6 @@ function checkout_branches {
           done
           ;;
       esac
-      ;;
-    update)
-      checkout_branch "develop"
-      checkout_branch "master"
-      checkout_branch "$BUILD_BRANCH"
-
-      # TODO: auto-checkout NEXT release branch, IF it exists
       ;;
   esac
 
@@ -205,13 +213,13 @@ function die_with_help {
   echo ""
   echo "Options:"
   echo "  -a|--action STRING"
-  echo "\tOperation to perform: add-to, deploy, finish, start, update (REQUIRED)"
+  echo "\tOperation to perform: add-to, deploy, finish, start (REQUIRED)"
   echo "  -b|--branch STRING"
   echo "\tBranch name; overrides -v|--version"
   echo "  -f|--from STRING"
   echo "\tParent branch (on start; REQUIRED for integration)"
   echo "  -i|--input-file STRING"
-  echo "\tList of feature branches to build (REQUIRED except on deploy, finish hotfix, finish release and update release)"
+  echo "\tList of feature branches to build (REQUIRED except on deploy, finish hotfix and finish release)"
   echo "  -o|--output-file STRING"
   echo "\tOverride the auto-generated filename for the log file"
   echo "  -t|--type STRING"
@@ -246,15 +254,13 @@ function die_on_invalid_build_type {
 function die_on_invalid_branch_or_version {
   local branch_or_version="$BRANCH"
 
-  if [ -z $branch_or_version ]; then
+  if [ -z "$branch_or_version" ]; then
     branch_or_version="$VERSION"
   fi
 
-  if ([ "$BUILD_TYPE" = "bugfix" ] || [ "$BUILD_TYPE" = "hotfix" ]) &&
-    eval "echo '$branch_or_version' | grep -E -q -w '^.+\.0$'"; then
-
+  if ([ "$BUILD_TYPE" = "bugfix" ] || [ "$BUILD_TYPE" = "hotfix" ]) && [[ "$branch_or_version" == *.0 ]]; then
     die "Invalid branch or version $branch_or_version"
-  elif [ "$BUILD_TYPE" = "release" ] && eval "echo '$branch_or_version' | grep -E -q -v -w '^.+\.0$'"; then
+  elif [ "$BUILD_TYPE" = "release" ] && [[ "$branch_or_version" != *.0 ]]; then
     die "Invalid branch or version $branch_or_version"
   fi
 }
@@ -535,25 +541,82 @@ function perform_finish {
       show_rebase_conflicts
       show_merge_conflicts
       ;;
-    hotfix|release)
-      merge_or_abort $BUILD_BRANCH "master"
+    hotfix)
+      # the UPCOMING release date EXCLUDING current date
+      local release_branch="release/`date -v +1d -v +Mon -v +7d -v +1m -v 1d -v -14d -v +Mon +%y.%-m`.0"
 
+      merge_or_abort $BUILD_BRANCH "master"
       if [ ${#MERGED_BRANCHES[@]} -eq 1 ]; then
         execute_or_die "git push origin master"
 
         merge_or_abort $BUILD_BRANCH "develop"
-      else
-        show_merge_conflict $BUILD_BRANCH "master"
-      fi
+        if [ ${#MERGED_BRANCHES[@]} -eq 2 ]; then
+          execute_or_die "git push origin develop"
 
-      if [ ${#MERGED_BRANCHES[@]} -eq 2 ]; then
-        execute_or_die "git push origin develop"
+          log_info "# Successfully merged $BUILD_BRANCH to develop"
+          if ! git branch -r | grep -q $release_branch; then
+            log_info "# To deploy, use the following command:"
+            log_info "#   $APP_NAME -a deploy -t develop"
+          fi
+          log_info ""
+        else
+          show_merge_conflict $BUILD_BRANCH "develop"
+        fi
 
-        log_info "# Successfully finished $BUILD_TYPE branch $BUILD_BRANCH"
+        if git branch -r | grep -q $release_branch; then
+          local merged_branches_count=${#MERGED_BRANCHES[@]}
+          merge_or_abort $BUILD_BRANCH "$release_branch"
+
+          if [ ${#MERGED_BRANCHES[@]} -gt $merged_branches_count ]; then
+            execute_or_die "git push origin $release_branch"
+
+            log_info "# Successfully merged $BUILD_BRANCH to $release_branch"
+            log_info "# To deploy, use the following command:"
+            log_info "#   $APP_NAME -a deploy -t release -b $release_branch"
+            log_info ""
+          else
+            show_merge_conflict $BUILD_BRANCH "$release_branch"
+          fi
+        fi
+
+        log_info "# Successfully merged $BUILD_BRANCH to master"
         log_info "# To deploy, use the following command:"
         log_info "#   $APP_NAME -a deploy -t production"
         log_info ""
       else
+        log_error "${MERGED_BRANCHES[@]:(-1)}"
+
+        show_merge_conflict $BUILD_BRANCH "master"
+        show_merge_conflict $BUILD_BRANCH "develop"
+
+        if git branch -r | grep -q $release_branch; then
+          show_merge_conflict $BUILD_BRANCH "$release_branch"
+        fi
+      fi
+      ;;
+    release)
+      merge_or_abort $BUILD_BRANCH "master"
+      if [ ${#MERGED_BRANCHES[@]} -eq 1 ]; then
+        execute_or_die "git push origin master"
+
+        merge_or_abort $BUILD_BRANCH "develop"
+        if [ ${#MERGED_BRANCHES[@]} -eq 2 ]; then
+          execute_or_die "git push origin develop"
+
+          log_info "# Successfully merged $BUILD_BRANCH to develop"
+          log_info "# To deploy, use the following command:"
+          log_info "#   $APP_NAME -a deploy -t develop"
+          log_info ""
+        else
+          show_merge_conflict $BUILD_BRANCH "develop"
+        fi
+
+        log_info "# Successfully merged $BUILD_BRANCH to master"
+        log_info "# To deploy, use the following command:"
+        log_info "#   $APP_NAME -a deploy -t production"
+        log_info ""
+      else
+        show_merge_conflict $BUILD_BRANCH "master"
         show_merge_conflict $BUILD_BRANCH "develop"
       fi
     ;;
@@ -592,32 +655,6 @@ function perform_start {
       log_info "# Successfully created $BUILD_BRANCH from develop."
       ;;
   esac
-}
-
-function perform_update {
-  initialize_branch_lists
-  log_info "# Updating $BUILD_BRANCH via $APP_NAME $APP_VERSION..."
-
-  execute_or_die "git checkout develop"
-  merge_or_abort "develop" "$BUILD_BRANCH"
-
-  if [ ${#MERGED_BRANCHES[@]} -gt 0 ]; then
-    execute_or_die "git push origin $BUILD_BRANCH"
-
-    log_info "# Successfully updated $BUILD_TYPE branch $BUILD_BRANCH"
-    log_info "# To deploy, use the following command:"
-    log_info "#   $APP_NAME -a deploy -t $BUILD_TYPE -b $BUILD_BRANCH"
-    log_info ""
-
-    cleanup_branches
-  else
-    show_merge_conflicts "skip_error_message"
-
-    log_warn "# To fix this manually, use the following commands after fixing the merge conflict(s):"
-    log_warn "#   git checkout $BUILD_BRANCH"
-    log_warn "#   git merge --no-edit --no-ff develop"
-    log_warn ""
-  fi
 }
 
 function rebase_and_merge_or_abort {
@@ -699,7 +736,7 @@ function validate_build_branch {
   fi
 
   case "$ACTION" in
-    add-to|deploy|finish|update)
+    add-to|deploy|finish)
       die_on_missing_branch $BUILD_BRANCH
       ;;
     start)
@@ -723,7 +760,7 @@ function validate_cli_arguments {
         develop)
           BRANCH="develop"
           ;;
-        hotfix|release)
+        hotfix)
           die_on_missing_branch_or_version
           die_on_invalid_branch_or_version
           ;;
@@ -733,6 +770,11 @@ function validate_cli_arguments {
           ;;
         production)
           BRANCH="master"
+          ;;
+        release)
+          if [ -n "$BRANCH" ] || [ -n "$VERSION" ]; then
+            die_on_invalid_branch_or_version
+          fi
           ;;
         *)
           die_on_invalid_build_type ""
@@ -749,17 +791,20 @@ function validate_cli_arguments {
     start)
       die_on_invalid_build_type "hotfix|integration|release"
 
-      if [ "$BUILD_TYPE" = "integration" ]; then
-        die_on_invalid_parent_branch "develop|master"
-      else
-        die_on_missing_branch_or_version
-        die_on_invalid_branch_or_version
-      fi
-      ;;
-    update)
-      die_on_invalid_build_type "release"
-      die_on_missing_branch_or_version
-      die_on_invalid_branch_or_version
+      case "$BUILD_TYPE" in
+        hotfix)
+          die_on_missing_branch_or_version
+          die_on_invalid_branch_or_version
+          ;;
+        integration)
+          die_on_invalid_parent_branch "develop|master"
+          ;;
+        release)
+          if [ -n "$BRANCH" ] || [ -n "$VERSION" ]; then
+            die_on_invalid_branch_or_version
+          fi
+          ;;
+      esac
       ;;
     *)
       die_with_help "Invalid action $ACTION"
@@ -860,9 +905,6 @@ case "$ACTION" in
     ;;
   start)
     perform_start
-    ;;
-  update)
-    perform_update
     ;;
 esac
 

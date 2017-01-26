@@ -1,14 +1,13 @@
 #!/bin/sh
 
 APP_NAME="git-build"
-APP_VERSION="v1.0.1"
+APP_VERSION="v2.0.0"
 COLOR_DEBUG=`printf "\x1B[0;90m"`
 COLOR_DEFAULT=`printf "\x1B[0m"`
 COLOR_RED=`printf "\x1B[0;91m"`
 COLOR_PREFIX=`printf '\x1B'`
 ENVIRONMENT_EY_PRODUCTION="indinero3_production"
 ENVIRONMENT_EY_RELEASE="staging_v3"
-ENVIRONMENT_EY_HOTFIX="" # TODO
 INSTALLER_URL_CURL="https://curl.haxx.se/download.html"
 INSTALLER_URL_GIT="https://git-scm.com/downloads/"
 INSTALLER_URL_GEM="https://rubygems.org/pages/download/"
@@ -215,17 +214,20 @@ function die_with_help {
   echo "  -a|--action STRING"
   echo "\tOperation to perform: add-to, deploy, finish, start (REQUIRED)"
   echo "  -b|--branch STRING"
-  echo "\tBranch name; overrides -v|--version"
+  echo "\tBranch name; overrides -v|--version (REQUIRED is -v|--version is not provided)"
   echo "  -f|--from STRING"
-  echo "\tParent branch (on start; REQUIRED for integration)"
+  echo "\tParent branch (REQUIRED for start integration and deploy integration)"
   echo "  -i|--input-file STRING"
-  echo "\tList of feature branches to build (REQUIRED except on deploy, finish hotfix and finish release)"
+  echo "\tList of feature branches to build (REQUIRED except for deploy, finish hotfix, finish release and start release)"
   echo "  -o|--output-file STRING"
   echo "\tOverride the auto-generated filename for the log file"
   echo "  -t|--type STRING"
-  echo "\tType of branch to build or deploy: bugfix, feature, hotfix, integration, production, release (REQUIRED)"
+  echo "\tType of branch to build or deploy: bugfix, develop, feature, hotfix, integration, production, release (REQUIRED)"
   echo "  -v|--version YY.M.D"
-  echo "\tVersion number (REQUIRED)"
+  echo "\tVersion number"
+  echo "\t  AUTO-GENERATED for deploy release, finish release, start integration, start release"
+  echo "\t  IGNORED for deploy develop, deploy production and finish feature"
+  echo "\t  REQUIRED for everything else, if -b|--branch is not provided"
   echo ""
 
   die "$@"

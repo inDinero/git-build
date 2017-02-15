@@ -2,7 +2,7 @@
 Convenience script for building and deploying branches on EngineYard or on Larga.
 
 ### Latest Version
-1.0.1
+2.0.0
 
 ### Usage
 ```sh
@@ -10,9 +10,13 @@ $ git-build <options>
 ```
 
 ### Available Options
-* `-a|--action string` Operation to perform: append, create (REQUIRED)
-* `-e|--environment string` Destination environment: integration, production, staging (on deploy; REQUIRED for hotfix and release)
-* `-f|--flag integer` Incrementing flag (non-zero REQUIRED for hotfix, default: 0)
-* `-i|--input-file string` List of feature branches to build (optional; ignored on deploy)
-* `-t|--type string` Type of branch to build: hotfix, release, stage (REQUIRED)
-* `-v|--version yy.m.d` Optional, version number (default: current date for hotfix and stage, next Monday for release)
+* `-a|--action STRING` Operation to perform: add-to, deploy, finish, start (REQUIRED)
+* `-b|branch STRING` Branch name; overrides -v|--version (REQUIRED is -v|--version is not provided)
+* `-f|--from STRING` Parent branch (REQUIRED for start integration and deploy integration)
+* `-i|--input-file STRING` List of feature branches to build (REQUIRED except for deploy, finish hotfix, finish release and start release)
+* `-o|--output-file STRING` Override the auto-generated filename for the log file
+* `-t|--type STRING` Type of branch to build or deploy: bugfix, develop, feature, hotfix, integration, production, release (REQUIRED)
+* `-v|--version YY.M.D` Version number
+  * AUTO-GENERATED for deploy release, finish release, start integration, start release
+  * IGNORED for deploy develop, deploy production and finish feature
+  * REQUIRED for everything else, if -b|--branch is not provided

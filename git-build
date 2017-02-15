@@ -105,7 +105,6 @@ function checkout_branches {
           checkout_branch "$BUILD_BRANCH"
           for branch in $INPUT_BRANCHES; do
             checkout_branch $branch
-            execute "git log"
           done
           ;;
         feature)
@@ -542,6 +541,12 @@ function perform_finish {
 
       show_rebase_conflicts
       show_merge_conflicts
+
+      if [ ${#MERGED_BRANCHES[@]} -gt 0 ] && [[ "$BUILD_BRANCH" == *.0 ]]; then
+        log_info "# To deploy, use the following command:"
+        log_info "#   $APP_NAME -a deploy -t release -b $BUILD_BRANCH"
+        log_info ""
+      fi
       ;;
     hotfix)
       # the UPCOMING release date EXCLUDING current date
@@ -550,6 +555,11 @@ function perform_finish {
       merge_or_abort $BUILD_BRANCH "master"
       if [ ${#MERGED_BRANCHES[@]} -eq 1 ]; then
         execute_or_die "git push origin master"
+
+        if [ -n "$VERSION" ]; then
+          execute_or_die "git tag $VERSION"
+          execute_or_die "git push origin $VERSION"
+        fi
 
         merge_or_abort $BUILD_BRANCH "develop"
         if [ ${#MERGED_BRANCHES[@]} -eq 2 ]; then
@@ -600,6 +610,11 @@ function perform_finish {
       merge_or_abort $BUILD_BRANCH "master"
       if [ ${#MERGED_BRANCHES[@]} -eq 1 ]; then
         execute_or_die "git push origin master"
+
+        if [ -n "$VERSION" ]; then
+          execute_or_die "git tag $VERSION"
+          execute_or_die "git push origin $VERSION"
+        fi
 
         merge_or_abort $BUILD_BRANCH "develop"
         if [ ${#MERGED_BRANCHES[@]} -eq 2 ]; then
@@ -673,7 +688,6 @@ function rebase_and_merge_or_abort {
     log_warn "# Rebase conflict detected for $1"
     execute_or_die "git rebase --abort"
     log_info ""
-    execute "git log"
 
     UNREBASED_BRANCHES+=($1)
   fi

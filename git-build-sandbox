@@ -1,0 +1,128 @@
+#!/bin/sh
+
+function die {
+  echo "Unable to proceed; $@"
+  exit 1
+}
+
+function setup_sandbox {
+  local git_build_sandbox=`which git-build-sandbox`
+  if [ -z "$git_build_sandbox" ]; then
+    die "git-build-sandbox not found!"
+  elif ! test -L $git_build_sandbox; then
+    die "$git_build_sandbox is not a symbolic link."
+  fi
+
+  git_build_sandbox=$(dirname $(readlink $git_build_sandbox))
+  if [ ! -d $git_build_sandbox/sandbox ]; then
+    die "$git_build_sandbox/sandbox not found!"
+  fi
+
+  git_build_sandbox="$git_build_sandbox/sandbox"
+
+  local current_time=`date +%y%m%d%H%M%S`
+
+  echo "Setting up sandbox repository..."
+
+  TEST_REPO_NAME="git-build-sandbox-repo-$current_time"
+  mkdir /tmp/$TEST_REPO_NAME
+  cd /tmp/$TEST_REPO_NAME
+  git init --bare > /dev/null 2>&1
+
+  echo "Setting up sandbox environment..."
+
+  TEST_ENV_NAME="git-build-sandbox-env-$current_time"
+  mkdir /tmp/$TEST_ENV_NAME
+  cd /tmp/$TEST_ENV_NAME
+  git clone /tmp/$TEST_REPO_NAME > /dev/null 2>&1
+  cd /tmp/$TEST_ENV_NAME/$TEST_REPO_NAME
+
+  echo "Setting up master branch..."
+  cp -R $git_build_sandbox/master/* .
+  cp -R $git_build_sandbox/exercises/* .
+  (git add -A && git commit -m "Initial commit for master branch") > /dev/null 2>&1
+  git push origin master > /dev/null 2>&1
+
+  echo "Setting up bugfix branches..."
+  git checkout -b bugfix/192-add-mongodb-gems > /dev/null 2>&1
+  cp -R $git_build_sandbox/bugfix-192/* .
+  (git add -A && git commit -m "Add MongoDB-related gems") > /dev/null 2>&1
+  git push origin bugfix/192-add-mongodb-gems > /dev/null 2>&1
+
+  (git checkout master && git checkout -b bugfix/187-add-test-gems) > /dev/null 2>&1
+  cp -R $git_build_sandbox/bugfix-187/* .
+  (git add -A && git commit -m "Add gems for test environment") > /dev/null 2>&1
+  git push origin bugfix/187-add-test-gems > /dev/null 2>&1
+
+  (git checkout master && git checkout -b bugfix/181-add-development-gems) > /dev/null 2>&1
+  cp -R $git_build_sandbox/bugfix-181/* .
+  (git add -A && git commit -m "Add gems for development environment") > /dev/null 2>&1
+  git push origin bugfix/181-add-development-gems > /dev/null 2>&1
+
+  echo "Setting up integration branch from master..."
+  local master_integration_version=`date -v -10S +%y%m%d%H%M%S`
+  (git checkout master && git checkout -b integration/$master_integration_version) > /dev/null 2>&1
+  git merge --no-edit --no-ff bugfix/192-add-mongodb-gems > /dev/null 2>&1
+  git push origin integration/$master_integration_version > /dev/null 2>&1
+
+  echo "Setting up hotfix branch..."
+  local last_release_month=`date -v -Mon -v +14d -v 1d -v -14d -v +Mon +%y.%-m`
+  (git checkout master && git checkout -b hotfix/$last_release_month.1) > /dev/null 2>&1
+  git merge --no-edit --no-ff bugfix/192-add-mongodb-gems > /dev/null 2>&1
+  git push origin hotfix/$last_release_month.1 > /dev/null 2>&1
+
+  echo "Setting up patch for hotfix..."
+  git checkout -b patch/$last_release_month.1/192-added-gemfile-lock > /dev/null 2>&1
+  cp -R $git_build_sandbox/patch-192/* .
+  (git add -A && git commit -m "Uploaded Gemfile.lock") > /dev/null 2>&1
+  git push origin patch/$last_release_month.1/192-added-gemfile-lock > /dev/null 2>&1
+
+  echo "Setting up develop branch..."
+  (git checkout master && git checkout -b develop && git checkout -b feature/176-implement-controllers) > /dev/null 2>&1
+  cp -R $git_build_sandbox/feature-176/* .
+  (git add -A && git commit -m "Implemented controllers for companies and users") > /dev/null 2>&1
+  git push origin feature/176-implement-controllers > /dev/null 2>&1
+  (git checkout develop && git merge --no-edit --no-ff feature/176-implement-controllers) > /dev/null 2>&1
+  git push origin develop > /dev/null 2>&1
+
+  echo "Setting up feature branches"
+  git checkout -b feature/164-implement-category > /dev/null 2>&1
+  cp -R $git_build_sandbox/feature-164/* .
+  (git add -A && git commit -m "Implemented category model") > /dev/null 2>&1
+  git push origin feature/164-implement-category > /dev/null 2>&1
+
+  (git checkout develop && git checkout -b feature/163-link-users-to-company) > /dev/null 2>&1
+  cp -R $git_build_sandbox/feature-163/* .
+  (git add -A && git commit -m "Assigned company for every user") > /dev/null 2>&1
+  git push origin feature/163-link-users-to-company > /dev/null 2>&1
+
+  (git checkout develop && git checkout -b feature/159-link-company-to-user) > /dev/null 2>&1
+  cp -R $git_build_sandbox/feature-159/* .
+  (git add -A && git commit -m "Assigned master user for every company") > /dev/null 2>&1
+  git push origin feature/159-link-company-to-user > /dev/null 2>&1
+
+  echo "Setting up integration branch from develop..."
+  local develop_integration_version=`date -v +10S +%y%m%d%H%M%S`
+  (git checkout master && git checkout -b integration/$develop_integration_version) > /dev/null 2>&1
+  git merge --no-edit --no-ff feature/164-implement-category > /dev/null 2>&1
+  git push origin integration/$develop_integration_version > /dev/null 2>&1
+
+  echo "Setting up release branch..."
+  local next_release_month=`date -v +1d -v +Mon -v +7d -v +1m -v 1d -v -14d -v +Mon +%y.%-m`
+  (git checkout develop && git checkout -b release/$next_release_month.0) > /dev/null 2>&1
+  git push origin hotfix/$next_release_month.0 > /dev/null 2>&1
+
+  echo "Setting up patch for release..."
+  git checkout -b patch/$next_release_month.0/176-implement-specs > /dev/null 2>&1
+  cp -R $git_build_sandbox/patch-176/* .
+  (git add -A && git commit -m "Implemented controller specs") > /dev/null 2>&1
+  git push origin patch/$next_release_month.0/176-implement-specs > /dev/null 2>&1
+
+  git checkout master > /dev/null 2>&1
+  echo ""
+  echo "All done! Go to your sandbox environment using the following command:"
+  echo "  cd /tmp/$TEST_ENV_NAME/$TEST_REPO_NAME"
+  echo ""
+}
+
+setup_sandbox

@@ -1,0 +1,62 @@
+if RUBY_VERSION =~ /1.9/
+  Encoding.default_external = Encoding::UTF_8
+  Encoding.default_internal = Encoding::UTF_8
+end
+
+source 'https://rubygems.org'
+
+gem 'rake', '10.0.3'
+gem 'rails', '3.2.21'
+
+group :production, :staging do
+  gem 'passenger'
+  gem 'newrelic_rpm'
+end
+
+group :test do
+  # Testing framework
+  gem 'rspec-rails', '~> 2.99.0'
+  gem 'factory_girl_rails'
+  gem 'dummy_dropbox_sdk', :git => 'git://github.com/sylv3rblade/dummy_dropbox_sdk.git'
+  gem "parallel_tests"
+  gem 'timecop'
+  gem 'faker'
+  gem 'rspec-instafail'
+  gem 'connection_pool'
+  gem 'headless'
+  gem 'poltergeist'
+  gem 'selenium-webdriver'
+  gem 'api_matchers'
+  gem 'test_after_commit'
+  gem 'database_cleaner'
+  gem 'json_spec'
+  gem 'require_all'
+
+  gem 'capybara'
+
+  gem 'cucumber', '~> 2.0.0', require: false
+
+  # For mocking calls to external API
+  gem 'vcr'
+  gem 'webmock', require: false
+
+  # Testing
+  gem 'page-object', '1.2.2'
+  gem 'net-http-persistent'
+
+  gem 'cucumber-timecop', require: false
+
+  # test stripe webhooks
+  gem 'stripe_tester', '~> 0.5.0'
+
+  # RSpec matchers for database queries. Branch from 0.1.2 for RSpec 2 Support
+  gem 'db-query-matchers', git: 'git://github.com/gkmlo/db-query-matchers.git', branch: 'feature/rspec2-updates'
+
+  gem 'rack_session_access'
+
+  gem 'knapsack'
+
+  gem 'ngrok-rspec'
+
+  gem 'pusher-fake'
+end

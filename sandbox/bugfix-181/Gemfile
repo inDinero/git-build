@@ -1,0 +1,72 @@
+if RUBY_VERSION =~ /1.9/
+  Encoding.default_external = Encoding::UTF_8
+  Encoding.default_internal = Encoding::UTF_8
+end
+
+source 'https://rubygems.org'
+
+gem 'rake', '10.0.3'
+gem 'rails', '3.2.21'
+
+group :development do
+  # Allows preview of email in browser
+  gem 'letter_opener'
+
+  # Enables viewing of routes in browser
+  gem 'sextant'
+
+  # Display speed badge for each page
+  gem 'rack-mini-profiler'
+
+  # Removes asset pipeline from log
+  gem 'quiet_assets'
+
+  # Lists and allows running of rake tasks in browser
+  gem 'rake_t'
+
+  # Displays better error page
+  gem 'better_errors'
+
+  # Optional dependency of `better_errors`
+  gem 'binding_of_caller'
+
+  # For easier reading of log within browser using `RailsPanel` Chrome extension
+  gem 'meta_request'
+
+  # Rails applicaiton preloaded
+  gem 'spring'
+
+  # Optional dependency of `spring`
+  gem 'spring-commands-rspec'
+
+  # Displays available methods grouped by its ancestors
+  gem 'looksee', '~> 3.1.0'
+
+  # For consistent ruby code practices
+  gem 'rubocop'
+  gem 'rubocop-git'
+
+  # For consistent haml code practices
+  gem 'haml_lint'
+
+  # For consistent scss code practices
+  gem 'scss_lint', require: false
+
+  # For eliminating N+1 queries
+  gem 'bullet'
+
+  # Quick automated code review of your changes
+  gem 'pronto', '~> 0.7.1'
+  gem 'pronto-brakeman', require: false
+  gem 'pronto-coffeelint', require: false
+  gem 'pronto-haml', require: false
+  gem 'pronto-jshint', require: false
+  gem 'pronto-rails_best_practices', require: false
+  gem 'pronto-rubocop', require: false
+  gem 'pronto-scss', require: false
+end
+
+group :production, :staging do
+  gem 'passenger'
+  gem 'newrelic_rpm'
+end

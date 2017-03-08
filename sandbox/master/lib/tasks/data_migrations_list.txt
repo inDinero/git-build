@@ -1,0 +1,8 @@
+# Use Time.current.strftime('%Y%m%d%H%M%S') to generate a time stamp and just append to this list.
+# In the OS X Terminal, you can run `ruby -rtime -e "puts Time.now.utc.strftime('%Y%m%d%H%M%S')" | pbcopy`.
+# Run rake ey_deploy:run_outstanding_tasks to run these rake tasks
+# Run rake db:migrate first before running rake data:migrate
+# Rake tasks will be run chronologically using the timestamps, not in the order listed
+# Rake task parameters are not yet supported
+20160212015307 companies:populate_with_default_companies
+20160302170329 users:populate_with_default_users

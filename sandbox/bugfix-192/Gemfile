@@ -1,0 +1,21 @@
+if RUBY_VERSION =~ /1.9/
+  Encoding.default_external = Encoding::UTF_8
+  Encoding.default_internal = Encoding::UTF_8
+end
+
+source 'https://rubygems.org'
+
+gem 'rake', '10.0.3'
+gem 'rails', '3.2.21'
+
+# mongodb
+gem "mongoid"
+gem "bson_ext"
+gem 'mongoid-enum'
+gem "mongoid-pagination"
+gem 'delayed_job_mongoid'
+
+group :production, :staging do
+  gem 'passenger'
+  gem 'newrelic_rpm'
+end
